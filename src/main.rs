@@ -83,7 +83,7 @@ fn run_app<B: ratatui::backend::Backend>(
         if events.poll(Duration::from_millis(250))? {
             match events.read()? {
                 Event::Key(key) => handle_key(app, key)?,
-                Event::Mouse(mouse) => handle_mouse(app, mouse)?, // Handle Mouse
+                Event::Mouse(mouse) => handle_mouse(app, mouse)?,
                 _ => {}
             }
         }
@@ -92,7 +92,7 @@ fn run_app<B: ratatui::backend::Backend>(
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent) -> Result<()> {
-    // If date picker is open, ignore mouse for now (or implement click logic for it)
+    // If date picker is open, ignore mouse for now
     if app.date_picker.is_some() {
         return Ok(());
     }
@@ -113,6 +113,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    // 1. Handle Date Picker Input Priority
     if app.date_picker.is_some() {
         match key.code {
             KeyCode::Esc => app.date_picker = None,
@@ -125,6 +126,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         return Ok(());
     }
+
     match app.input_mode {
         InputMode::Normal => {
             match key.code {
@@ -294,6 +296,20 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     }
                 } else {
                     app.on_modal_input(key);
+                }
+            }
+            // Add Date Picker Trigger
+            KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                let should_open = matches!(
+                    &app.active_modal,
+                    Some(ActiveModal::Task {
+                        focus: TaskFocus::Date,
+                        ..
+                    })
+                );
+
+                if should_open {
+                    app.open_date_picker();
                 }
             }
             _ => {
