@@ -1087,11 +1087,16 @@ impl<'a> App<'a> {
 
             // Inject into the active modal's date field
             if let Some(ActiveModal::Task { date, .. }) = &mut self.active_modal {
-                // Clear existing lines
-                while !date.lines().is_empty() {
-                    date.delete_line_by_head();
+                // Create a new TextArea with the selected date
+                let mut new_area = TextArea::from(vec![date_str]);
+
+                // Preserve the existing block styling (borders, title)
+                if let Some(block) = date.block() {
+                    new_area.set_block(block.clone());
                 }
-                date.insert_str(&date_str);
+
+                // Replace the old TextArea
+                *date = Box::new(new_area);
             }
         }
         self.date_picker = None;
