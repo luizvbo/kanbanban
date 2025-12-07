@@ -3,7 +3,10 @@ use anyhow::Result;
 use chrono::Local;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct Database {
     file_path: PathBuf,
@@ -72,7 +75,8 @@ impl Database {
 
     pub fn gen_id() -> u64 {
         let start = SystemTime::now();
-        start.duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+        let since_epoch = start.duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+        since_epoch.wrapping_add(ID_COUNTER.fetch_add(1, Ordering::SeqCst))
     }
 
     fn log(&mut self, event: &str, obj: &str, desc: &str) {
@@ -119,7 +123,7 @@ impl Database {
             finish_column_id: None,
         };
         self.data.boards.push(board);
-        self.log("CREATE", "Board", &format!("Created board '{}'", name));
+        self.log("CREATE", "Board", &format!("Created board '{name}'"));
         self.save()
     }
 
@@ -127,7 +131,7 @@ impl Database {
         if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
             board.name = name.clone();
             board.icon = Some(icon);
-            self.log("UPDATE", "Board", &format!("Updated board '{}'", name));
+            self.log("UPDATE", "Board", &format!("Updated board '{name}'"));
             self.save()?;
         }
         Ok(())
@@ -137,7 +141,7 @@ impl Database {
         if let Some(idx) = self.data.boards.iter().position(|b| b.id == board_id) {
             let name = self.data.boards[idx].name.clone();
             self.data.boards.remove(idx);
-            self.log("DELETE", "Board", &format!("Deleted board '{}'", name));
+            self.log("DELETE", "Board", &format!("Deleted board '{name}'"));
             self.save()?;
         }
         Ok(())
@@ -153,7 +157,7 @@ impl Database {
                 tasks: vec![],
             };
             board.columns.push(col);
-            self.log("CREATE", "Column", &format!("Created column '{}'", name));
+            self.log("CREATE", "Column", &format!("Created column '{name}'"));
             self.save()?;
         }
         Ok(())
@@ -179,11 +183,7 @@ impl Database {
                 return Err(anyhow::anyhow!("Cannot delete non-empty column"));
             }
             board.columns.remove(idx);
-            self.log(
-                "DELETE",
-                "Column",
-                &format!("Deleted column '{}'", col_name),
-            );
+            self.log("DELETE", "Column", &format!("Deleted column '{col_name}'"));
             self.save()?;
         }
         Ok(())
@@ -239,11 +239,7 @@ impl Database {
             color,
         };
         self.data.categories.push(cat);
-        self.log(
-            "CREATE",
-            "Category",
-            &format!("Created category '{}'", name),
-        );
+        self.log("CREATE", "Category", &format!("Created category '{name}'"));
         self.save()
     }
 
@@ -302,7 +298,7 @@ impl Database {
                 due_date,
             };
             col.tasks.push(task);
-            self.log("CREATE", "Task", &format!("Created task '{}'", title));
+            self.log("CREATE", "Task", &format!("Created task '{title}'"));
             self.save()?;
         }
         Ok(())
@@ -326,7 +322,7 @@ impl Database {
                     task.due_date = due.and_then(|d| {
                         chrono::NaiveDateTime::parse_from_str(&d, "%Y-%m-%d %H:%M:%S").ok()
                     });
-                    self.log("UPDATE", "Task", &format!("Updated task '{}'", title));
+                    self.log("UPDATE", "Task", &format!("Updated task '{title}'"));
                     self.save()?;
                     return Ok(());
                 }
@@ -341,7 +337,7 @@ impl Database {
                 if let Some(idx) = col.tasks.iter().position(|t| t.id == task_id) {
                     let title = col.tasks[idx].title.clone();
                     col.tasks.remove(idx);
-                    self.log("DELETE", "Task", &format!("Deleted task '{}'", title));
+                    self.log("DELETE", "Task", &format!("Deleted task '{title}'"));
                     self.save()?;
                     return Ok(());
                 }

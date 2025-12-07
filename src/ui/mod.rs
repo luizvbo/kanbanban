@@ -65,7 +65,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!(" Kanbanban - {} ", board_name)),
+                .title(format!(" Kanbanban - {board_name} ")),
         )
         .select(index)
         .highlight_style(Style::default().fg(Color::Yellow));

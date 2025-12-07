@@ -5,6 +5,7 @@ use chrono::NaiveDate;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::widgets::TableState;
+use tracing::{debug, info};
 use tui_textarea::TextArea;
 
 use crate::{
@@ -266,9 +267,17 @@ impl<'a> App<'a> {
     }
 
     pub fn select_highlighted_board(&mut self) -> Result<()> {
+        debug!(
+            "Selecting highlighted board with index: {}",
+            self.board_selector_index
+        );
         self.active_board_index = self.board_selector_index;
         self.view_mode = ViewMode::Board;
         self.refresh_data()?;
+        info!(
+            "Switched to board: {}",
+            self.boards[self.active_board_index].name
+        );
         Ok(())
     }
 
@@ -978,44 +987,72 @@ impl<'a> App<'a> {
     // --- Mouse Logic ---
 
     pub fn handle_mouse_down(&mut self, x: u16, y: u16) {
-        // Find what was clicked
-        let zone = self
+        debug!("handle_mouse_down: x={}, y={}", x, y);
+        let zone_option = self
             .hit_zones
             .iter()
-            .find(|(rect, _)| {
-                x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+            .rev()
+            .find(|(rect, hit_zone_val)| {
+                let hit = x >= rect.x
+                    && x < rect.x + rect.width
+                    && y >= rect.y
+                    && y < rect.y + rect.height;
+                if hit {
+                    debug!(
+                        "Hit detected for rect {:?} with zone {:?}",
+                        rect, hit_zone_val
+                    );
+                }
+                hit
             })
-            .map(|(_, zone)| zone);
+            .map(|(_, zone_val)| *zone_val);
 
-        if let Some(z) = zone {
+        if let Some(z) = zone_option {
             match z {
                 HitZone::Task(col_idx, task_idx) => {
-                    // Select the task immediately
-                    self.selected_column_index = *col_idx;
-                    self.selected_task_index = *task_idx;
+                    debug!(
+                        "Clicked on Task at col_idx={}, task_idx={}",
+                        col_idx, task_idx
+                    );
+                    self.selected_column_index = col_idx;
+                    self.selected_task_index = task_idx;
 
-                    // Prepare for potential drag
-                    let col_id = self.columns[*col_idx].id;
-                    let tasks = self.get_tasks_in_column(Some(col_id));
-                    if let Some(task) = tasks.get(*task_idx) {
+                    // Get the task_id directly without holding a borrow to 'self'
+                    let task_id_to_drag = {
+                        let col_id = self.columns[col_idx].id;
+                        let tasks = self.get_tasks_in_column(Some(col_id));
+                        tasks.get(task_idx).map(|task| task.inner.id)
+                    };
+
+                    if let Some(id) = task_id_to_drag {
                         self.drag_state = Some(DragState {
-                            task_id: task.inner.id,
-                            source_col_idx: *col_idx,
-                            source_task_idx: *task_idx,
-                            is_dragging: false, // Will become true on Drag event
+                            task_id: id,
+                            source_col_idx: col_idx,
+                            source_task_idx: task_idx,
+                            is_dragging: false,
                         });
+                        debug!("Drag state initialized for task_id={}", id);
                     }
                 }
                 HitZone::Column(col_idx) => {
-                    self.selected_column_index = *col_idx;
+                    debug!("Clicked on Column at col_idx={}", col_idx);
+                    self.selected_column_index = col_idx;
                     self.selected_task_index = 0;
                 }
                 HitZone::BoardSelector(idx) => {
-                    self.board_selector_index = *idx;
-                    let _ = self.select_highlighted_board();
+                    debug!("Clicked on BoardSelector at index={}", idx);
+                    self.board_selector_index = idx;
+                    let _ = self.select_highlighted_board(); // This will change view_mode
                 }
-                _ => {}
+                HitZone::None => {
+                    // This arm should no longer be HitZone::None, but rather None from the option.
+                    // If HitZone::None is still a variant, the logic `map(|(_, zone_val)| *zone_val)`
+                    // above will convert None to a HitZone::None variant.
+                    debug!("Clicked on None hit zone.");
+                }
             }
+        } else {
+            debug!("No hit zone detected for click at ({}, {})", x, y);
         }
     }
 
@@ -1026,37 +1063,64 @@ impl<'a> App<'a> {
     }
 
     pub fn handle_mouse_up(&mut self, x: u16, y: u16) -> Result<()> {
-        // Handle Drop
-        if let Some(drag) = self.drag_state.take()
-            && drag.is_dragging
-        {
-            // Find target column
-            let target_zone = self.hit_zones.iter().find(|(rect, zone)| {
-                x >= rect.x
-                    && x < rect.x + rect.width
-                    && y >= rect.y
-                    && y < rect.y + rect.height
-                    && matches!(zone, HitZone::Column(_) | HitZone::Task(_, _))
-            });
+        debug!("handle_mouse_up: x={}, y={}", x, y);
+        if let Some(drag) = self.drag_state.take() {
+            if drag.is_dragging {
+                debug!(
+                    "Drag ended for task_id={}, from col_idx={}",
+                    drag.task_id, drag.source_col_idx
+                );
+                let target_zone = self.hit_zones.iter().find(|(rect, zone)| {
+                    let hit = x >= rect.x
+                        && x < rect.x + rect.width
+                        && y >= rect.y
+                        && y < rect.y + rect.height
+                        && matches!(zone, HitZone::Column(_) | HitZone::Task(_, _));
+                    if hit {
+                        debug!("Drop target detected: rect {:?} with zone {:?}", rect, zone);
+                    }
+                    hit
+                });
 
-            if let Some((_, zone)) = target_zone {
-                let target_col_idx = match zone {
-                    HitZone::Column(i) => *i,
-                    HitZone::Task(i, _) => *i,
-                    _ => return Ok(()),
-                };
+                if let Some((_, zone)) = target_zone {
+                    let target_col_idx = match zone {
+                        HitZone::Column(i) => *i,
+                        HitZone::Task(i, _) => *i,
+                        _ => {
+                            debug!(
+                                "Dropped on unhandleable zone, or outside any relevant zone. Drag state consumed."
+                            );
+                            return Ok(());
+                        }
+                    };
 
-                // Only move if column changed
-                if target_col_idx != drag.source_col_idx {
-                    let board = &self.boards[self.active_board_index];
-                    let target_col_id = self.columns[target_col_idx].id;
-                    self.db.move_task(board.id, drag.task_id, target_col_id)?;
+                    if target_col_idx != drag.source_col_idx {
+                        debug!(
+                            "Attempting to move task {} from col {} to target col {}",
+                            drag.task_id, drag.source_col_idx, target_col_idx
+                        );
+                        let board = &self.boards[self.active_board_index];
+                        let target_col_id = self.columns[target_col_idx].id;
+                        self.db.move_task(board.id, drag.task_id, target_col_id)?;
 
-                    self.selected_column_index = target_col_idx;
-                    self.selected_task_index = 0; // Simplified: drop to top
-                    self.refresh_data()?;
+                        self.selected_column_index = target_col_idx;
+                        self.selected_task_index = 0;
+                        self.refresh_data()?;
+                        debug!("Task moved successfully, data refreshed.");
+                    } else {
+                        debug!(
+                            "Dropped on same column ({}), no move needed. Drag state consumed.",
+                            target_col_idx
+                        );
+                    }
+                } else {
+                    debug!("Dropped outside any recognized target zone. Drag state consumed.");
                 }
+            } else {
+                debug!("Mouse Up event, but no dragging occurred. Drag state consumed.");
             }
+        } else {
+            debug!("Mouse Up event, no active drag state.");
         }
         Ok(())
     }
@@ -1411,7 +1475,7 @@ mod tests {
         let (mut app, _file) = setup_app();
         // Add logs
         for i in 0..10 {
-            app.db.create_board(format!("B{}", i), "".into()).unwrap();
+            app.db.create_board(format!("B{i}"), "".into()).unwrap();
         }
         app.refresh_data().unwrap();
 

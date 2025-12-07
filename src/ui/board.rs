@@ -61,7 +61,6 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
                         .as_ref()
                         .map(|d| d.lines().count())
                         .unwrap_or(0);
-                    // Base height 4: Borders(2) + Title(1) + Footer(1)
                     let card_height = (4 + desc_lines.min(5)) as u16;
 
                     if current_y + card_height > inner_area.y + inner_area.height {
@@ -100,7 +99,7 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
                         .constraints([
                             Constraint::Length(1), // Title
                             Constraint::Min(0),    // Markdown Desc
-                            Constraint::Length(1), // Footer
+                            Constraint::Length(1), // Footer (Dates)
                         ])
                         .split(card_inner);
 
@@ -129,11 +128,11 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
                     } else if days_created == 1 {
                         "Yesterday".to_string()
                     } else {
-                        format!("{}d ago", days_created)
+                        format!("{days_created}d ago")
                     };
 
                     let mut footer_line = Line::from(vec![Span::styled(
-                        format!("📅 {}", created_str),
+                        format!("📅 {created_str}"),
                         Style::default().fg(Color::Gray),
                     )]);
 
@@ -143,7 +142,7 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
                         } else if days == 0 {
                             (" Due Today".to_string(), Color::Yellow)
                         } else {
-                            (format!(" Due in {} days", days), Color::Gray)
+                            (format!(" Due in {days} days"), Color::Gray)
                         };
 
                         footer_line
@@ -184,12 +183,37 @@ pub fn render_selector(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    app.hit_zones.push((area, HitZone::BoardSelector(0)));
+    let list_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Select Board (n: New, e: Edit, d: Delete) ");
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Select Board (n: New, e: Edit, d: Delete) "),
-    );
-    f.render_widget(list, area);
+    f.render_widget(List::new(items.clone()).block(list_block.clone()), area);
+
+    let inner_list_area = list_block.inner(area); // This is the area *inside* the block borders
+    let item_height = 1; // Assuming each ListItem takes 1 row for its content
+
+    let mut new_selector_zones = Vec::new();
+    for (i, board) in app.boards.iter().enumerate() {
+        // Calculate the Y position for the start of this item
+        let item_y = inner_list_area.y + i as u16 * item_height;
+
+        // Ensure the item_rect is within the visible bounds of the inner_list_area
+        if item_y < inner_list_area.y + inner_list_area.height {
+            let item_rect = Rect::new(
+                inner_list_area.x,
+                item_y,
+                inner_list_area.width,
+                item_height,
+            );
+            new_selector_zones.push((item_rect, HitZone::BoardSelector(i)));
+            tracing::debug!(
+                "render_selector: Board '{}' (idx {}) hit zone: Rect({:?}), AppBoardsLen={}",
+                board.name,
+                i,
+                item_rect,
+                app.boards.len()
+            );
+        }
+    }
+    app.hit_zones.extend(new_selector_zones);
 }
