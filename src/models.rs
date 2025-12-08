@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub struct DataStore {
     pub boards: Vec<Board>,
     pub categories: Vec<Category>,
-    pub audit_logs: Vec<LogEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,7 +13,6 @@ pub struct Board {
     pub name: String,
     pub icon: Option<String>,
     pub columns: Vec<Column>,
-    // Logic Triggers
     pub reset_column_id: Option<u64>,
     pub start_column_id: Option<u64>,
     pub finish_column_id: Option<u64>,
@@ -63,13 +61,13 @@ impl Task {
 pub struct Category {
     pub id: u64,
     pub name: String,
-    pub color: String, // Hex code
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEvent {
     pub timestamp: NaiveDateTime,
-    pub event_type: String, // CREATE, UPDATE, DELETE
+    pub event_type: String,
     pub object_type: String,
     pub description: String,
 }

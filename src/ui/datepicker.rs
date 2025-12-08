@@ -108,3 +108,58 @@ pub fn render(f: &mut Frame, app: &App) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{App, DatePickerState};
+    use crate::db::Database;
+    use chrono::NaiveDate;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use tempfile::NamedTempFile;
+
+    fn setup_app() -> App<'static> {
+        let file = NamedTempFile::new().unwrap();
+        let db = Database::new(file.path()).unwrap();
+        App::new(db).unwrap()
+    }
+
+    #[test]
+    fn test_render_datepicker() {
+        let mut app = setup_app();
+
+        // Set a fixed date: 2023-12-25 (Monday)
+        let fixed_date = NaiveDate::from_ymd_opt(2023, 12, 25).unwrap();
+        app.date_picker = Some(DatePickerState {
+            current_date: fixed_date,
+        });
+
+        // FIX: Increased size from 50x20 to 100x40 to accommodate the 28-char wide calendar grid
+        // inside the 40% width popup.
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content.iter().map(|c| c.symbol()).collect();
+
+        // Check Header
+        assert!(content.contains("Select Date"));
+        assert!(content.contains("December 2023"));
+
+        // Check Days
+        // The format for day 1 is " 1  " (centered in 3 + 1 space)
+        assert!(
+            content.contains(" 1 "),
+            "Content missing ' 1 ': {}",
+            content
+        );
+        assert!(content.contains("25"));
+        assert!(content.contains("31"));
+
+        // Check Footer
+        assert!(content.contains("Arrows"));
+    }
+}

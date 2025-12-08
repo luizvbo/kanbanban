@@ -734,4 +734,47 @@ mod tests {
             "View mode should switch to Board after selecting a board"
         );
     }
+
+    #[test]
+    fn test_handle_key_datepicker_active() {
+        let mut app = setup_app();
+
+        // Activate DatePicker
+        app.open_date_picker();
+        assert!(app.date_picker.is_some());
+        let initial_date = app.date_picker.as_ref().unwrap().current_date;
+
+        // Press Down
+        handle_key(&mut app, KeyEvent::from(KeyCode::Down)).unwrap();
+
+        // Verify Date Changed (+1 week)
+        let new_date = app.date_picker.as_ref().unwrap().current_date;
+        assert!(new_date > initial_date);
+
+        // Press Esc
+        handle_key(&mut app, KeyEvent::from(KeyCode::Esc)).unwrap();
+
+        // Verify Closed
+        assert!(app.date_picker.is_none());
+    }
+
+    #[test]
+    fn test_handle_key_open_datepicker_shortcut() {
+        let mut app = setup_app();
+        app.open_new_task_modal();
+
+        // Move focus to Date field
+        if let Some(ActiveModal::Task { focus, .. }) = &mut app.active_modal {
+            *focus = TaskFocus::Date;
+        }
+
+        // Press Ctrl+D
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), event::KeyModifiers::CONTROL),
+        )
+        .unwrap();
+
+        assert!(app.date_picker.is_some());
+    }
 }
