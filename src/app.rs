@@ -63,6 +63,10 @@ pub enum ActiveModal<'a> {
         category_idx: usize,
         focus: TaskFocus,
         mode: ModalType,
+        // NEW FIELDS
+        is_editing: bool,
+        modified: bool,
+        show_confirm: bool,
     },
     Column {
         name: Box<TextArea<'a>>,
@@ -105,8 +109,6 @@ pub struct OverviewState {
     pub logs: Vec<LogEvent>,
     pub log_state: TableState,
 }
-
-// --- New Enums/Structs ---
 
 #[derive(Clone, Copy, Debug)]
 pub enum HitZone {
@@ -210,8 +212,6 @@ impl<'a> App<'a> {
         self.boards = self.db.data.boards.clone();
         self.categories = self.db.data.categories.clone();
 
-        // Load logs from JSONL instead of DataStore
-        // Load last 100 logs for display
         self.overview_state.logs = self.db.get_recent_logs(100);
 
         self.category_map.clear();
@@ -545,6 +545,9 @@ impl<'a> App<'a> {
             category_idx: 0,
             focus: TaskFocus::Title,
             mode: ModalType::TaskNew,
+            is_editing: true, // Start in edit mode for new tasks
+            modified: false,
+            show_confirm: false,
         });
         self.input_mode = InputMode::Editing;
     }
@@ -594,6 +597,9 @@ impl<'a> App<'a> {
                 category_idx: cat_idx,
                 focus: TaskFocus::Title,
                 mode: ModalType::TaskEdit(task.inner.id),
+                is_editing: false, // Start in nav mode for edit
+                modified: false,
+                show_confirm: false,
             });
             self.input_mode = InputMode::Editing;
         }
@@ -754,15 +760,24 @@ impl<'a> App<'a> {
         self.input_mode = InputMode::Normal;
     }
 
-    pub fn cycle_modal_focus(&mut self) {
+    pub fn cycle_modal_focus(&mut self, reverse: bool) {
         if let Some(modal) = &mut self.active_modal {
             match modal {
                 ActiveModal::Task { focus, .. } => {
-                    *focus = match focus {
-                        TaskFocus::Title => TaskFocus::Description,
-                        TaskFocus::Description => TaskFocus::Date,
-                        TaskFocus::Date => TaskFocus::Category,
-                        TaskFocus::Category => TaskFocus::Title,
+                    *focus = if reverse {
+                        match focus {
+                            TaskFocus::Title => TaskFocus::Category,
+                            TaskFocus::Category => TaskFocus::Date,
+                            TaskFocus::Date => TaskFocus::Description,
+                            TaskFocus::Description => TaskFocus::Title,
+                        }
+                    } else {
+                        match focus {
+                            TaskFocus::Title => TaskFocus::Description,
+                            TaskFocus::Description => TaskFocus::Date,
+                            TaskFocus::Date => TaskFocus::Category,
+                            TaskFocus::Category => TaskFocus::Title,
+                        }
                     };
                 }
                 ActiveModal::Category { focus, .. } => {
@@ -782,27 +797,81 @@ impl<'a> App<'a> {
         }
     }
 
+    pub fn toggle_task_edit_mode(&mut self) {
+        if let Some(ActiveModal::Task { is_editing, .. }) = &mut self.active_modal {
+            *is_editing = !*is_editing;
+        }
+    }
+
+    pub fn on_task_modal_input(&mut self, key: ratatui::crossterm::event::KeyEvent) {
+        if let Some(ActiveModal::Task {
+            title,
+            desc,
+            date,
+            focus,
+            modified,
+            is_editing,
+            ..
+        }) = &mut self.active_modal
+        {
+            // Only process input if we are in editing mode
+            if *is_editing {
+                let changed = match focus {
+                    TaskFocus::Title => title.input(key),
+                    TaskFocus::Description => desc.input(key),
+                    TaskFocus::Date => date.input(key),
+                    TaskFocus::Category => false,
+                };
+                if changed {
+                    *modified = true;
+                }
+            }
+        }
+    }
+
+    pub fn try_close_task_modal(&mut self) {
+        if let Some(ActiveModal::Task {
+            modified,
+            show_confirm,
+            is_editing,
+            ..
+        }) = &mut self.active_modal
+        {
+            if *show_confirm {
+                *show_confirm = false;
+                return;
+            }
+
+            if *is_editing {
+                *is_editing = false;
+                return;
+            }
+
+            if *modified {
+                *show_confirm = true;
+            } else {
+                self.close_modal();
+            }
+        } else {
+            self.close_modal();
+        }
+    }
+
+    pub fn handle_confirm_save(&mut self, save: bool) -> Result<()> {
+        if save {
+            self.save_modal_data()?;
+        } else {
+            self.close_modal();
+        }
+        Ok(())
+    }
+
     pub fn on_modal_input(&mut self, key: ratatui::crossterm::event::KeyEvent) {
         if let Some(modal) = &mut self.active_modal {
             match modal {
-                ActiveModal::Task {
-                    title,
-                    desc,
-                    date,
-                    focus,
-                    ..
-                } => match focus {
-                    TaskFocus::Title => {
-                        title.input(key);
-                    }
-                    TaskFocus::Description => {
-                        desc.input(key);
-                    }
-                    TaskFocus::Date => {
-                        date.input(key);
-                    }
-                    TaskFocus::Category => {} // Handled in main.rs
-                },
+                ActiveModal::Task { .. } => {
+                    // Task modal input is handled by on_task_modal_input
+                }
                 ActiveModal::Column { name, .. } => {
                     name.input(key);
                 }
@@ -1358,24 +1427,31 @@ mod tests {
             assert_eq!(*focus, TaskFocus::Title);
         }
 
-        app.cycle_modal_focus();
+        // Pass 'false' for forward cycling
+        app.cycle_modal_focus(false);
         if let Some(ActiveModal::Task { focus, .. }) = &app.active_modal {
             assert_eq!(*focus, TaskFocus::Description);
         }
 
-        app.cycle_modal_focus();
+        app.cycle_modal_focus(false);
         if let Some(ActiveModal::Task { focus, .. }) = &app.active_modal {
             assert_eq!(*focus, TaskFocus::Date);
         }
 
-        app.cycle_modal_focus();
+        app.cycle_modal_focus(false);
         if let Some(ActiveModal::Task { focus, .. }) = &app.active_modal {
             assert_eq!(*focus, TaskFocus::Category);
         }
 
-        app.cycle_modal_focus();
+        app.cycle_modal_focus(false);
         if let Some(ActiveModal::Task { focus, .. }) = &app.active_modal {
             assert_eq!(*focus, TaskFocus::Title);
+        }
+
+        // Test Reverse Cycling (Shift+Tab)
+        app.cycle_modal_focus(true);
+        if let Some(ActiveModal::Task { focus, .. }) = &app.active_modal {
+            assert_eq!(*focus, TaskFocus::Category);
         }
     }
 
