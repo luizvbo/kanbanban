@@ -9,6 +9,8 @@ use config::load_config;
 use db::Database;
 
 use anyhow::Result;
+use clap::Parser;
+use directories::ProjectDirs;
 use ratatui::crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseEvent,
@@ -18,9 +20,20 @@ use ratatui::crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use std::path::PathBuf;
 use std::{io, time::Duration};
+use tracing::{Level, debug, error, info};
+use tracing_subscriber::EnvFilter;
 
-// Trait to abstract event handling for testing
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Custom path to the database file or directory
+    /// If a directory is provided, 'kanbanban.yaml' will be appended.
+    #[arg(value_name = "PATH")]
+    db_path: Option<PathBuf>,
+}
+
 pub trait EventHandler {
     fn poll(&self, timeout: Duration) -> Result<bool>;
     fn read(&self) -> Result<Event>;
@@ -38,7 +51,40 @@ impl EventHandler for CrosstermEventHandler {
 }
 
 fn main() -> Result<()> {
-    let (_config, db_path) = load_config()?;
+    let args = Args::parse();
+    let proj_dirs = ProjectDirs::from("", "", "kanbanban")
+        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+    let log_dir = proj_dirs.data_dir().join("logs");
+
+    // Ensure log directory exists
+    if !log_dir.exists() {
+        std::fs::create_dir_all(&log_dir)?;
+    }
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "kanbanban.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_max_level(Level::DEBUG)
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    let (_config, default_db_path) = load_config()?;
+    let db_path = match args.db_path {
+        Some(path) => {
+            if path.is_dir() {
+                path.join("kanbanban.yaml")
+            } else {
+                path
+            }
+        }
+        None => default_db_path,
+    };
+
+    info!("Using database file: {:?}", db_path);
+
     let db = Database::new(db_path)?;
     let mut app = App::new(db)?;
 
@@ -60,7 +106,8 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        println!("{:?}", err);
+        eprintln!("{err:?}");
+        error!("Application error: {:?}", err);
     }
 
     Ok(())
@@ -74,7 +121,6 @@ fn run_app<B: ratatui::backend::Backend>(
     while !app.should_quit {
         terminal.draw(|f| {
             crate::ui::ui(f, app);
-            // Render Date Picker on top if active
             if app.date_picker.is_some() {
                 crate::ui::datepicker::render(f, app);
             }
@@ -82,8 +128,14 @@ fn run_app<B: ratatui::backend::Backend>(
 
         if events.poll(Duration::from_millis(250))? {
             match events.read()? {
-                Event::Key(key) => handle_key(app, key)?,
-                Event::Mouse(mouse) => handle_mouse(app, mouse)?,
+                Event::Key(key) => {
+                    debug!("Key event: {:?}", key);
+                    handle_key(app, key)?
+                }
+                Event::Mouse(mouse) => {
+                    debug!("Mouse event: {:?}", mouse);
+                    handle_mouse(app, mouse)?
+                }
                 _ => {}
             }
         }
@@ -92,19 +144,26 @@ fn run_app<B: ratatui::backend::Backend>(
 }
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent) -> Result<()> {
-    // If date picker is open, ignore mouse for now
     if app.date_picker.is_some() {
         return Ok(());
     }
 
     match mouse.kind {
-        MouseEventKind::Down(_) => {
+        MouseEventKind::Down(button) => {
+            debug!(
+                "Mouse Down at ({}, {}), button: {:?}",
+                mouse.column, mouse.row, button
+            );
             app.handle_mouse_down(mouse.column, mouse.row);
         }
-        MouseEventKind::Drag(_) => {
+        MouseEventKind::Drag(_button) => {
             app.handle_mouse_drag(mouse.column, mouse.row);
         }
-        MouseEventKind::Up(_) => {
+        MouseEventKind::Up(button) => {
+            debug!(
+                "Mouse Up at ({}, {}), button: {:?}",
+                mouse.column, mouse.row, button
+            );
             app.handle_mouse_up(mouse.column, mouse.row)?;
         }
         _ => {}
@@ -113,6 +172,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    debug!("Handling key event: {:?}", key);
     // 1. Handle Date Picker Input Priority
     if app.date_picker.is_some() {
         match key.code {
@@ -322,6 +382,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::app::HitZone;
+
     use super::*;
     use ratatui::backend::TestBackend;
     use std::cell::RefCell;
@@ -352,7 +414,20 @@ mod tests {
         }
     }
 
+    fn init_test_tracing() {
+        let _ = tracing_subscriber::FmtSubscriber::builder()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_env_filter("kanbanban=debug,ratatui=debug")
+            // `try_init()` will return an error if tracing is already initialized,
+            // which is fine in tests where multiple tests might call this.
+            // We just ignore the error.
+            .with_writer(std::io::stderr) // Or use a custom writer for test output
+            .with_ansi(false) // Disable ANSI colors in test output for cleaner logs
+            .try_init();
+    }
+
     fn setup_app() -> App<'static> {
+        init_test_tracing(); // <-- CALL THIS HERE
         let file = NamedTempFile::new().unwrap();
         let db = Database::new(file.path()).unwrap();
         App::new(db).unwrap()
@@ -535,5 +610,128 @@ mod tests {
         if let Some(ActiveModal::Task { category_idx, .. }) = &app.active_modal {
             assert_eq!(*category_idx, 0);
         }
+    }
+
+    #[test]
+
+    fn test_handle_mouse_click_task() {
+        let mut app = setup_app();
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Add a task to make a clickable area
+        let board_id = app.boards[0].id;
+        let col_id = app.columns[0].id;
+        app.db
+            .create_task(board_id, col_id, "Click Me".into(), "".into(), None, None)
+            .unwrap();
+        app.refresh_data().unwrap();
+
+        // Render once to populate hit_zones
+        terminal
+            .draw(|f| {
+                crate::ui::ui(f, &mut app);
+            })
+            .unwrap();
+
+        // Find the rect for the task
+        let task_hit_zone = app
+            .hit_zones
+            .iter()
+            .find(|(_, zone)| matches!(zone, HitZone::Task(_, _)));
+        assert!(
+            task_hit_zone.is_some(),
+            "Should have a task hit zone after rendering"
+        );
+
+        let (task_rect, _) = task_hit_zone.unwrap();
+        // Click inside the task's rect
+        let click_x = task_rect.x + 1;
+        let click_y = task_rect.y; // FIX: Don't add 1 to Y if height might be small, or ensure it's within bounds
+
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(event::MouseButton::Left),
+            column: click_x,
+            row: click_y,
+            modifiers: event::KeyModifiers::empty(),
+        };
+
+        handle_mouse(&mut app, mouse_event).unwrap();
+
+        // Verify that the task is now selected
+        assert_eq!(app.selected_column_index, 0);
+        assert_eq!(app.selected_task_index, 0);
+    }
+
+    #[test]
+
+    fn test_handle_mouse_click_board_selector() {
+        let mut app = setup_app();
+        let backend = TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Initial state before adding the second board
+        assert_eq!(app.boards.len(), 1);
+        assert_eq!(app.active_board_index, 0);
+
+        // Add a second board
+        app.db.create_board("Board 2".into(), "✨".into()).unwrap();
+        app.refresh_data().unwrap();
+
+        assert_eq!(app.boards.len(), 2);
+        assert_eq!(app.active_board_index, 0);
+
+        // Switch to BoardSelector view
+        app.view_mode = ViewMode::BoardSelector;
+
+        // Render once to populate hit_zones for the selector
+        terminal
+            .draw(|f| {
+                crate::ui::ui(f, &mut app);
+            })
+            .unwrap();
+
+        // Find the rect for the second board in the selector (index 1)
+        let board_selector_hit_zone = app
+            .hit_zones
+            .iter()
+            .find(|(_, zone)| matches!(zone, HitZone::BoardSelector(idx) if *idx == 1));
+        assert!(
+            board_selector_hit_zone.is_some(),
+            "Should have a board selector hit zone for index 1"
+        );
+
+        let (board_rect, _) = board_selector_hit_zone.unwrap();
+
+        // FIX: Click inside the rect. Since height is 1, y must be exactly board_rect.y
+        let click_x = board_rect.x + 1;
+        let click_y = board_rect.y;
+
+        tracing::debug!(
+            "Targeting Board 2 (index 1). Click coordinates: ({}, {}). Target Rect: {:?}",
+            click_x,
+            click_y,
+            board_rect
+        );
+
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(event::MouseButton::Left),
+            column: click_x,
+            row: click_y,
+            modifiers: event::KeyModifiers::empty(),
+        };
+
+        handle_mouse(&mut app, mouse_event).unwrap();
+
+        // Verify that the second board is now active and view mode switched to Board
+        assert_eq!(
+            app.active_board_index, 1,
+            "Active board index should be 1 after clicking Board 2"
+        );
+        assert_eq!(
+            app.view_mode,
+            ViewMode::Board,
+            "View mode should switch to Board after selecting a board"
+        );
     }
 }

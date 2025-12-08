@@ -96,7 +96,7 @@ pub fn render(f: &mut Frame, app: &App, modal: &ActiveModal) {
                 cat_style = cat_style.fg(*color);
             }
 
-            let cat_selector = Paragraph::new(format!(" < {} > ", cat_name))
+            let cat_selector = Paragraph::new(format!(" < {cat_name} > "))
                 .style(cat_style)
                 .block(
                     Block::default()

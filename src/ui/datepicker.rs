@@ -77,7 +77,7 @@ pub fn render(f: &mut Frame, app: &App) {
 
         for day in 1..=days_in_month {
             let is_selected = (day as u32) == dp.current_date.day();
-            let day_str = format!("{:^3} ", day);
+            let day_str = format!("{day:^3} ");
 
             let style = if is_selected {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
