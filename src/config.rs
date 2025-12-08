@@ -86,4 +86,20 @@ mod tests {
         assert_eq!(config.theme, "test");
         assert_eq!(config.columns_in_view, 3);
     }
+
+    #[test]
+    fn test_config_missing_file_defaults() {
+        // We can't easily change ProjectDirs in a test without a mock,
+        // but we can simulate the logic of "file doesn't exist" by
+        // manually parsing an empty string or testing the default implementation directly.
+        let config = Config::default();
+        assert_eq!(config.theme, "dracula");
+    }
+
+    #[test]
+    fn test_config_malformed() {
+        let bad_toml = "theme = "; // Invalid
+        let res: Result<Config, _> = toml::from_str(bad_toml);
+        assert!(res.is_err());
+    }
 }

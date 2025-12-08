@@ -113,7 +113,7 @@ pub enum HitZone {
     Column(usize),        // Column Index
     Task(usize, usize),   // Column Index, Task Index
     BoardSelector(usize), // Board Index
-    #[allow(dead_code)] // Suppress warning if None isn't explicitly constructed yet
+    #[allow(dead_code)]
     None,
 }
 
@@ -121,14 +121,13 @@ pub enum HitZone {
 pub struct DragState {
     pub task_id: u64,
     pub source_col_idx: usize,
-    #[allow(dead_code)] // Suppress warning until intra-column reordering is implemented
+    #[allow(dead_code)]
     pub source_task_idx: usize,
     pub is_dragging: bool,
 }
 
 pub struct DatePickerState {
     pub current_date: NaiveDate,
-    // Removed 'focused' field as it was unused
 }
 
 pub struct App<'a> {
@@ -210,8 +209,10 @@ impl<'a> App<'a> {
     pub fn refresh_data(&mut self) -> Result<()> {
         self.boards = self.db.data.boards.clone();
         self.categories = self.db.data.categories.clone();
-        self.overview_state.logs = self.db.data.audit_logs.clone();
-        self.overview_state.logs.reverse();
+
+        // Load logs from JSONL instead of DataStore
+        // Load last 100 logs for display
+        self.overview_state.logs = self.db.get_recent_logs(100);
 
         self.category_map.clear();
         for cat in &self.categories {
@@ -1045,9 +1046,6 @@ impl<'a> App<'a> {
                     let _ = self.select_highlighted_board(); // This will change view_mode
                 }
                 HitZone::None => {
-                    // This arm should no longer be HitZone::None, but rather None from the option.
-                    // If HitZone::None is still a variant, the logic `map(|(_, zone_val)| *zone_val)`
-                    // above will convert None to a HitZone::None variant.
                     debug!("Clicked on None hit zone.");
                 }
             }
@@ -1127,7 +1125,7 @@ impl<'a> App<'a> {
 
     // --- Date Picker Logic ---
 
-    #[allow(dead_code)] // Suppress warning if not used in tests
+    #[allow(dead_code)]
     pub fn open_date_picker(&mut self) {
         let now = chrono::Local::now().naive_local().date();
         self.date_picker = Some(DatePickerState { current_date: now });
@@ -1502,5 +1500,110 @@ mod tests {
 
         app.delete_current_task().unwrap();
         assert_eq!(app.tasks.len(), 0);
+    }
+
+    #[test]
+    fn test_date_picker_navigation() {
+        let (mut app, _file) = setup_app();
+        let start_date = NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(); // Sunday
+        app.date_picker = Some(DatePickerState {
+            current_date: start_date,
+        });
+
+        // Move Right (+1 day)
+        app.date_picker_nav(1, 0);
+        assert_eq!(
+            app.date_picker.as_ref().unwrap().current_date,
+            NaiveDate::from_ymd_opt(2023, 1, 2).unwrap()
+        );
+
+        // Move Down (+1 week)
+        app.date_picker_nav(0, 1);
+        assert_eq!(
+            app.date_picker.as_ref().unwrap().current_date,
+            NaiveDate::from_ymd_opt(2023, 1, 9).unwrap()
+        );
+
+        // Move Up (-1 week)
+        app.date_picker_nav(0, -1);
+        assert_eq!(
+            app.date_picker.as_ref().unwrap().current_date,
+            NaiveDate::from_ymd_opt(2023, 1, 2).unwrap()
+        );
+
+        // Move Left (-1 day)
+        app.date_picker_nav(-1, 0);
+        assert_eq!(app.date_picker.as_ref().unwrap().current_date, start_date);
+    }
+
+    #[test]
+    fn test_date_picker_selection_injects_to_modal() {
+        let (mut app, _file) = setup_app();
+
+        // Open modal
+        app.open_new_task_modal();
+
+        // Set date picker state
+        let target_date = NaiveDate::from_ymd_opt(2025, 5, 20).unwrap();
+        app.date_picker = Some(DatePickerState {
+            current_date: target_date,
+        });
+
+        // Select
+        app.select_date();
+
+        // Check if date picker closed
+        assert!(app.date_picker.is_none());
+
+        // Check if value is in modal
+        if let Some(ActiveModal::Task { date, .. }) = &app.active_modal {
+            assert_eq!(date.lines()[0], "2025-05-20");
+        } else {
+            panic!("Modal not active or wrong type");
+        }
+    }
+
+    #[test]
+    fn test_drag_and_drop_logic_flow() {
+        let (mut app, _file) = setup_app();
+
+        // 1. Mouse Down on a Task
+        // Manually populate hit zones to simulate a render having happened
+        let rect = Rect::new(0, 0, 10, 5);
+        app.hit_zones.push((rect, HitZone::Task(0, 0))); // Col 0, Task 0
+
+        // Add actual task data so lookup doesn't fail
+        let bid = app.boards[0].id;
+        let cid = app.columns[0].id;
+        app.db
+            .create_task(bid, cid, "DragMe".into(), "".into(), None, None)
+            .unwrap();
+        app.refresh_data().unwrap();
+
+        // Click
+        app.handle_mouse_down(1, 1);
+        assert!(app.drag_state.is_some());
+        assert!(!app.drag_state.as_ref().unwrap().is_dragging);
+
+        // 2. Drag
+        app.handle_mouse_drag(2, 2);
+        assert!(app.drag_state.as_ref().unwrap().is_dragging);
+
+        // 3. Mouse Up on a different column
+        // Setup hit zone for target column (index 1)
+        let target_rect = Rect::new(20, 0, 10, 5);
+        app.hit_zones.push((target_rect, HitZone::Column(1)));
+
+        // Release mouse over target
+        app.handle_mouse_up(21, 1).unwrap();
+
+        // Verify Drag State Cleared
+        assert!(app.drag_state.is_none());
+
+        // Verify Task Moved
+        let col1_id = app.columns[1].id;
+        let tasks = app.get_tasks_in_column(Some(col1_id));
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].inner.title, "DragMe");
     }
 }
