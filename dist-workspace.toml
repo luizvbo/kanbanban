@@ -1,0 +1,34 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.30.2"
+# The archive format to use for non-windows builds (defaults .tar.xz)
+unix-archive = ".tar.gz"
+# CI backends to support
+ci = "github"
+# Whether CI should include auto-generated code to build local artifacts
+build-local-artifacts = false
+# Which actions to run on pull requests
+pr-run-mode = "plan"
+# Which phase dist should use to create the GitHub release
+github-release = "announce"
+# Whether to publish prereleases to package managers
+publish-prereleases = true
+# The installers to generate for each app
+installers = ["shell", "powershell", "homebrew"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "aarch64-pc-windows-msvc", "arm-unknown-linux-musleabihf", "armv7-unknown-linux-gnueabihf", "armv7-unknown-linux-musleabihf", "x86_64-apple-darwin", "powerpc64-unknown-linux-gnu", "powerpc64le-unknown-linux-gnu", "riscv64gc-unknown-linux-gnu", "s390x-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc", "i686-unknown-linux-gnu", "i686-unknown-linux-musl", "i686-pc-windows-msvc"]
+# A GitHub repo to push Homebrew formulas to
+tap = "j178/homebrew-tap"
+# Customize the Homebrew formula name
+formula = "prek"
+# Whether to install an updater program
+install-updater = false
+# Path that installers should place binaries in
+install-path = ["$XDG_BIN_HOME/", "$XDG_DATA_HOME/../bin", "~/.local/bin"]
+
+[dist.github-custom-runners]
+global = "ubuntu-latest"

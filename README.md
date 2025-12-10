@@ -20,17 +20,35 @@ It is a high-performance port of the Python [kanban-tui](https://github.com/Zalo
 
 ## 📦 Installation
 
-### From Source
+<details>
+<summary>Standalone installer</summary>
+
+kanbanban provides a standalone installer script to download and install the tool.
+
+On Linux and macOS:
 
 ```bash
-git clone https://github.com/yourusername/kanbanban.git
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/luizvbo/kanbanban/releases/latest/download/kanbanban-installer.sh | sh
+```
+
+On Windows:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://github.com/luizvbo/kanbanban/releases/latest/download/kanbanban-installer.ps1 | iex"
+```
+
+</details>
+<details>
+
+<summary>From Source</summary>
+
+```bash
+git clone https://github.com/luizvbo/kanbanban.git
 cd kanbanban
 cargo install --path .
 ```
 
-### Binary
-
-_(If you release binaries, add instructions here)_
+</details>
 
 ## 🎮 Usage
 
@@ -59,10 +77,31 @@ kanbanban
 |            | `d`                   | **D**elete Task                        |
 |            | `c`                   | New **C**olumn                         |
 |            | `D`                   | **D**elete Column                      |
-| **Modals** | `Tab`                 | Cycle focus between inputs             |
-|            | `Ctrl` + `s`          | Save and close                         |
-|            | `Esc`                 | Cancel and close                       |
-|            | `Ctrl` + `d`          | Open **Date Picker** (in Date field)   |
+
+#### Task Modal (Two-Layer Navigation)
+
+The Task Modal separates **Navigation** from **Editing** to prevent accidental changes.
+
+| State          | Key                 | Action                                      |
+| :------------- | :------------------ | :------------------------------------------ |
+| **Navigation** | `j` / `k`           | Select field up/down                        |
+|                | `Tab` / `Shift+Tab` | Cycle focus forward/backward                |
+|                | `Enter`             | **Edit** the selected field                 |
+|                | `Left` / `Right`    | Change Category (when Category selected)    |
+|                | `Ctrl` + `s`        | Save and close                              |
+|                | `Esc`               | Close (Prompts to save if modified)         |
+| **Editing**    | `Esc`               | Stop editing field (Return to Navigation)   |
+|                | `Enter`             | Confirm field (or new line for Description) |
+|                | `Ctrl` + `d`        | Open **Date Picker** (in Date field)        |
+
+#### Other Modals (Board, Column, Category)
+
+| Key                 | Action         |
+| :------------------ | :------------- |
+| `Tab` / `Shift+Tab` | Cycle focus    |
+| `Enter`             | Save and close |
+| `Ctrl` + `s`        | Save and close |
+| `Esc`               | Cancel         |
 
 ### Mouse Support
 

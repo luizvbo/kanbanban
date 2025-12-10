@@ -19,12 +19,12 @@ pub struct Database {
 impl Database {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file_path = path.as_ref().to_path_buf();
-        // Create a sibling file for logs: kanbanban.yaml -> kanbanban_audit.jsonl
+
         let file_stem = file_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("kanbanban");
-        let log_file_name = format!("{}_audit.jsonl", file_stem);
+        let log_file_name = format!("{file_stem}_audit.jsonl");
         let log_file_path = file_path.with_file_name(log_file_name);
 
         // Try to load existing data
@@ -92,8 +92,6 @@ impl Database {
         since_epoch.wrapping_add(ID_COUNTER.fetch_add(1, Ordering::SeqCst))
     }
 
-    // --- JSONL Logging Logic ---
-
     fn log(&mut self, event: &str, obj: &str, desc: &str) {
         let event = LogEvent {
             timestamp: Local::now().naive_local(),
@@ -107,15 +105,12 @@ impl Database {
             .create(true)
             .append(true)
             .open(&self.log_file_path)
+            && let Ok(json_line) = serde_json::to_string(&event)
         {
-            if let Ok(json_line) = serde_json::to_string(&event) {
-                let _ = writeln!(file, "{}", json_line);
-            }
+            let _ = writeln!(file, "{json_line}");
         }
     }
 
-    /// Reads the log file line-by-line and returns the last `limit` entries.
-    /// This keeps memory usage O(limit) rather than O(filesize).
     pub fn get_recent_logs(&self, limit: usize) -> Vec<LogEvent> {
         if !self.log_file_path.exists() {
             return vec![];
@@ -129,18 +124,16 @@ impl Database {
         let reader = BufReader::new(file);
         let mut buffer: VecDeque<LogEvent> = VecDeque::with_capacity(limit);
 
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                // Skip empty lines
-                if l.trim().is_empty() {
-                    continue;
+        for line in reader.lines().map_while(Result::ok) {
+            // Skip empty lines
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(event) = serde_json::from_str::<LogEvent>(&line) {
+                if buffer.len() == limit {
+                    buffer.pop_front();
                 }
-                if let Ok(event) = serde_json::from_str::<LogEvent>(&l) {
-                    if buffer.len() == limit {
-                        buffer.pop_front();
-                    }
-                    buffer.push_back(event);
-                }
+                buffer.push_back(event);
             }
         }
 
@@ -149,7 +142,6 @@ impl Database {
         logs.reverse();
         logs
     }
-
     // --- Board Management ---
     pub fn create_board(&mut self, name: String, icon: String) -> Result<()> {
         let board = Board {
@@ -236,6 +228,7 @@ impl Database {
             && let Some(idx) = board.columns.iter().position(|c| c.id == column_id)
         {
             let col_name = board.columns[idx].name.clone();
+            // Prevent deleting if tasks exist (optional safety)
             if !board.columns[idx].tasks.is_empty() {
                 return Err(anyhow::anyhow!("Cannot delete non-empty column"));
             }
@@ -312,6 +305,7 @@ impl Database {
     pub fn delete_category(&mut self, id: u64) -> Result<()> {
         if let Some(idx) = self.data.categories.iter().position(|c| c.id == id) {
             self.data.categories.remove(idx);
+            // Reset tasks that had this category
             for board in &mut self.data.boards {
                 for col in &mut board.columns {
                     for task in &mut col.tasks {
@@ -410,6 +404,7 @@ impl Database {
             let finish_col = board.finish_column_id;
             let reset_col = board.reset_column_id;
 
+            // 1. Remove from old column
             for col in &mut board.columns {
                 if let Some(idx) = col.tasks.iter().position(|t| t.id == task_id) {
                     task_opt = Some(col.tasks.remove(idx));
@@ -417,6 +412,7 @@ impl Database {
                 }
             }
 
+            // 2. Insert into new column and update dates (Status Logic)
             if let Some(mut task) = task_opt {
                 let now = Local::now().naive_local();
 
@@ -424,6 +420,7 @@ impl Database {
                     task.start_date = Some(now);
                     task.finish_date = None;
                 } else if Some(target_col_id) == finish_col {
+                    // If moving to finish, ensure start date exists (use creation if not)
                     if task.start_date.is_none() {
                         task.start_date = Some(task.creation_date);
                     }
@@ -675,14 +672,11 @@ mod tests {
     }
 
     #[test]
-    fn test_audit_logging_jsonl() {
-        let (mut db, file) = setup_db();
+    fn test_audit_logging() {
+        let (mut db, _file) = setup_db();
 
-        // Define expected log file path based on temp file
-        let log_path = file.path().with_file_name(format!(
-            "{}_audit.jsonl",
-            file.path().file_stem().unwrap().to_str().unwrap()
-        ));
+        // Use the log path directly from the database instance
+        let log_path = db.log_file_path.clone();
 
         // Create a board to trigger a log
         db.create_board("Log Test".into(), "".into()).unwrap();

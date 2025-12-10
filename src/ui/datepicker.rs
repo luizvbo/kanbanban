@@ -87,7 +87,7 @@ pub fn render(f: &mut Frame, app: &App) {
 
             current_line_spans.push(Span::styled(day_str, style));
 
-            if (start_offset + day as u32) % 7 == 0 {
+            if (start_offset + day as u32).is_multiple_of(7) {
                 calendar_lines.push(Line::from(current_line_spans.clone()));
                 current_line_spans.clear();
             }
@@ -151,11 +151,7 @@ mod tests {
 
         // Check Days
         // The format for day 1 is " 1  " (centered in 3 + 1 space)
-        assert!(
-            content.contains(" 1 "),
-            "Content missing ' 1 ': {}",
-            content
-        );
+        assert!(content.contains(" 1 "), "Content missing ' 1 ': {content}");
         assert!(content.contains("25"));
         assert!(content.contains("31"));
 

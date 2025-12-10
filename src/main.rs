@@ -173,192 +173,248 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) -> Result<()> {
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
     debug!("Handling key event: {:?}", key);
-    // 1. Handle Date Picker Input Priority
+
+    // 1. Priority: Date Picker
     if app.date_picker.is_some() {
+        return handle_datepicker_keys(app, key);
+    }
+
+    // 2. Main Logic based on Input Mode
+    match app.input_mode {
+        InputMode::Normal => handle_normal_mode(app, key),
+        InputMode::Editing => handle_editing_mode(app, key),
+    }
+}
+
+fn handle_datepicker_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => app.date_picker = None,
+        KeyCode::Enter => app.select_date(),
+        KeyCode::Left => app.date_picker_nav(-1, 0),
+        KeyCode::Right => app.date_picker_nav(1, 0),
+        KeyCode::Up => app.date_picker_nav(0, -1),
+        KeyCode::Down => app.date_picker_nav(0, 1),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('q') => app.quit(),
+
+        // Global View Switching
+        KeyCode::Char('v') => app.view_mode = ViewMode::Overview,
+        KeyCode::Char('b') => app.view_mode = ViewMode::Board,
+        KeyCode::Char('B') => {
+            app.view_mode = ViewMode::BoardSelector;
+            app.board_selector_index = app.active_board_index;
+        }
+        KeyCode::Char('s') => app.view_mode = ViewMode::Settings,
+        KeyCode::Char('C') => app.view_mode = ViewMode::CategoryManager,
+
+        // Context Specific Handlers
+        _ => match app.view_mode {
+            ViewMode::Board => handle_board_keys(app, key)?,
+            ViewMode::BoardSelector => handle_board_selector_keys(app, key)?,
+            ViewMode::Settings => handle_settings_keys(app, key)?,
+            ViewMode::Overview => handle_overview_keys(app, key)?,
+            ViewMode::CategoryManager => handle_category_manager_keys(app, key)?,
+        },
+    }
+    Ok(())
+}
+
+fn handle_board_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => app.move_down(),
+        KeyCode::Char('k') | KeyCode::Up => app.move_up(),
+        KeyCode::Char('h') | KeyCode::Left => app.move_left(),
+        KeyCode::Char('l') | KeyCode::Right => app.move_right(),
+        KeyCode::Char('L') => {
+            let _ = app.move_task_right();
+        }
+        KeyCode::Char('H') => {
+            let _ = app.move_task_left();
+        }
+        KeyCode::Char('n') => app.open_new_task_modal(),
+        KeyCode::Char('e') => app.open_edit_task_modal(),
+        KeyCode::Char('c') => app.open_new_column_modal(),
+        KeyCode::Char('d') => {
+            let _ = app.delete_current_task();
+        }
+        KeyCode::Char('D') => {
+            let _ = app.delete_current_column();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_board_selector_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            let _ = app.next_board();
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            let _ = app.prev_board();
+        }
+        KeyCode::Enter => {
+            app.select_highlighted_board()?;
+        }
+        KeyCode::Char('n') => {
+            app.open_new_board_modal();
+        }
+        KeyCode::Char('e') => {
+            app.open_edit_board_modal();
+        }
+        KeyCode::Char('d') => {
+            let _ = app.delete_highlighted_board();
+        }
+        KeyCode::Esc => app.view_mode = ViewMode::Board,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_settings_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if app.settings_state.selected_column_idx < app.columns.len().saturating_sub(1) {
+                app.settings_state.selected_column_idx += 1;
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.settings_state.selected_column_idx > 0 {
+                app.settings_state.selected_column_idx -= 1;
+            }
+        }
+        KeyCode::Char(' ') => {
+            app.toggle_column_visibility()?;
+        }
+        KeyCode::Char('r') => {
+            app.open_edit_column_modal();
+        }
+        KeyCode::Char('K') => {
+            app.move_column_up()?;
+        }
+        KeyCode::Char('J') => {
+            app.move_column_down()?;
+        }
+        KeyCode::Char('1') => {
+            app.set_column_as_status("start")?;
+        }
+        KeyCode::Char('2') => {
+            app.set_column_as_status("finish")?;
+        }
+        KeyCode::Char('3') => {
+            app.set_column_as_status("reset")?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_overview_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('1') => app.overview_state.tab = OverviewTab::Charts,
+        KeyCode::Char('2') => app.overview_state.tab = OverviewTab::Logs,
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let OverviewTab::Logs = app.overview_state.tab {
+                app.scroll_logs_down();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let OverviewTab::Logs = app.overview_state.tab {
+                app.scroll_logs_up();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_category_manager_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if app.category_selector_index < app.categories.len().saturating_sub(1) {
+                app.category_selector_index += 1;
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.category_selector_index > 0 {
+                app.category_selector_index -= 1;
+            }
+        }
+        KeyCode::Char('n') => app.open_new_category_modal(),
+        KeyCode::Char('e') => app.open_edit_category_modal(),
+        KeyCode::Char('d') => {
+            let _ = app.delete_current_category();
+        }
+        KeyCode::Esc => app.view_mode = ViewMode::Board,
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_editing_mode(app: &mut App, key: KeyEvent) -> Result<()> {
+    // Check if we are in the "Confirm Close" state
+    if let Some(ActiveModal::Task {
+        show_confirm: true, ..
+    }) = &app.active_modal
+    {
         match key.code {
-            KeyCode::Esc => app.date_picker = None,
-            KeyCode::Enter => app.select_date(),
-            KeyCode::Left => app.date_picker_nav(-1, 0),
-            KeyCode::Right => app.date_picker_nav(1, 0),
-            KeyCode::Up => app.date_picker_nav(0, -1),
-            KeyCode::Down => app.date_picker_nav(0, 1),
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                app.handle_confirm_save(true)?;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                app.handle_confirm_save(false)?;
+            }
+            KeyCode::Esc => {
+                // Cancel the close attempt
+                if let Some(ActiveModal::Task { show_confirm, .. }) = &mut app.active_modal {
+                    *show_confirm = false;
+                }
+            }
             _ => {}
         }
         return Ok(());
     }
 
-    match app.input_mode {
-        InputMode::Normal => {
-            match key.code {
-                KeyCode::Char('q') => app.quit(),
+    // Determine if we are in a Task Modal (which has 2 layers) or a Standard Modal
+    if matches!(app.active_modal, Some(ActiveModal::Task { .. })) {
+        handle_task_modal_keys(app, key)
+    } else {
+        handle_standard_modal_keys(app, key)
+    }
+}
 
-                // View Switching
-                KeyCode::Char('v') => app.view_mode = ViewMode::Overview,
-                KeyCode::Char('b') => app.view_mode = ViewMode::Board,
-                KeyCode::Char('B') => {
-                    app.view_mode = ViewMode::BoardSelector;
-                    app.board_selector_index = app.active_board_index;
+fn handle_task_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    // We need to peek at the state to know if we are editing or navigating
+    let is_editing_field = if let Some(ActiveModal::Task { is_editing, .. }) = &app.active_modal {
+        *is_editing
+    } else {
+        false
+    };
+
+    if is_editing_field {
+        // LAYER 2: EDITING A FIELD
+        match key.code {
+            KeyCode::Esc => app.try_close_task_modal(), // Goes back to Layer 1
+            KeyCode::Enter => {
+                if let Some(ActiveModal::Task { focus, .. }) = &app.active_modal {
+                    if *focus != TaskFocus::Description {
+                        app.toggle_task_edit_mode(); // Exit edit mode
+                    } else {
+                        app.on_task_modal_input(key); // Newline for desc
+                    }
                 }
-                KeyCode::Char('s') => app.view_mode = ViewMode::Settings,
-                KeyCode::Char('C') => app.view_mode = ViewMode::CategoryManager,
-
-                // Context Dependent Keys
-                _ => match app.view_mode {
-                    ViewMode::Board => match key.code {
-                        KeyCode::Char('j') | KeyCode::Down => app.move_down(),
-                        KeyCode::Char('k') | KeyCode::Up => app.move_up(),
-                        KeyCode::Char('h') | KeyCode::Left => app.move_left(),
-                        KeyCode::Char('l') | KeyCode::Right => app.move_right(),
-                        KeyCode::Char('L') => {
-                            let _ = app.move_task_right();
-                        }
-                        KeyCode::Char('H') => {
-                            let _ = app.move_task_left();
-                        }
-                        KeyCode::Char('n') => app.open_new_task_modal(),
-                        KeyCode::Char('e') => app.open_edit_task_modal(),
-                        KeyCode::Char('c') => app.open_new_column_modal(),
-                        KeyCode::Char('d') => {
-                            let _ = app.delete_current_task();
-                        }
-                        KeyCode::Char('D') => {
-                            let _ = app.delete_current_column();
-                        }
-                        _ => {}
-                    },
-                    ViewMode::BoardSelector => match key.code {
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            let _ = app.next_board();
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            let _ = app.prev_board();
-                        }
-                        KeyCode::Enter => {
-                            app.select_highlighted_board()?;
-                        }
-                        KeyCode::Char('n') => {
-                            app.open_new_board_modal();
-                        }
-                        KeyCode::Char('e') => {
-                            app.open_edit_board_modal();
-                        }
-                        KeyCode::Char('d') => {
-                            let _ = app.delete_highlighted_board();
-                        }
-                        KeyCode::Esc => app.view_mode = ViewMode::Board,
-                        _ => {}
-                    },
-                    ViewMode::Settings => match key.code {
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if app.settings_state.selected_column_idx
-                                < app.columns.len().saturating_sub(1)
-                            {
-                                app.settings_state.selected_column_idx += 1;
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if app.settings_state.selected_column_idx > 0 {
-                                app.settings_state.selected_column_idx -= 1;
-                            }
-                        }
-                        KeyCode::Char(' ') => {
-                            app.toggle_column_visibility()?;
-                        }
-
-                        KeyCode::Char('r') => {
-                            app.open_edit_column_modal();
-                        }
-                        KeyCode::Char('K') => {
-                            app.move_column_up()?;
-                        }
-                        KeyCode::Char('J') => {
-                            app.move_column_down()?;
-                        }
-                        KeyCode::Char('1') => {
-                            app.set_column_as_status("start")?;
-                        }
-                        KeyCode::Char('2') => {
-                            app.set_column_as_status("finish")?;
-                        }
-                        KeyCode::Char('3') => {
-                            app.set_column_as_status("reset")?;
-                        }
-                        _ => {}
-                    },
-                    ViewMode::Overview => match key.code {
-                        KeyCode::Char('1') => app.overview_state.tab = OverviewTab::Charts,
-                        KeyCode::Char('2') => app.overview_state.tab = OverviewTab::Logs,
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if let OverviewTab::Logs = app.overview_state.tab {
-                                app.scroll_logs_down();
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if let OverviewTab::Logs = app.overview_state.tab {
-                                app.scroll_logs_up();
-                            }
-                        }
-                        _ => {}
-                    },
-                    ViewMode::CategoryManager => match key.code {
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if app.category_selector_index < app.categories.len().saturating_sub(1)
-                            {
-                                app.category_selector_index += 1;
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if app.category_selector_index > 0 {
-                                app.category_selector_index -= 1;
-                            }
-                        }
-                        KeyCode::Char('n') => app.open_new_category_modal(),
-                        KeyCode::Char('e') => app.open_edit_category_modal(),
-                        KeyCode::Char('d') => {
-                            let _ = app.delete_current_category();
-                        }
-                        KeyCode::Esc => app.view_mode = ViewMode::Board,
-                        _ => {}
-                    },
-                },
             }
-        }
-        InputMode::Editing => match key.code {
-            KeyCode::Esc => app.close_modal(),
-            KeyCode::Tab => app.cycle_modal_focus(),
+            // Ctrl+S: Save
             KeyCode::Char('s') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                 app.save_modal_data()?;
             }
-            // Special handling for Category Selector in Task Modal
-            KeyCode::Left => {
-                if let Some(ActiveModal::Task {
-                    focus: TaskFocus::Category,
-                    category_idx,
-                    ..
-                }) = &mut app.active_modal
-                {
-                    if *category_idx > 0 {
-                        *category_idx -= 1;
-                    }
-                } else {
-                    app.on_modal_input(key);
-                }
-            }
-            KeyCode::Right => {
-                if let Some(ActiveModal::Task {
-                    focus: TaskFocus::Category,
-                    category_idx,
-                    ..
-                }) = &mut app.active_modal
-                {
-                    if *category_idx < app.categories.len().saturating_sub(1) {
-                        *category_idx += 1;
-                    }
-                } else {
-                    app.on_modal_input(key);
-                }
-            }
-            // Add Date Picker Trigger
+            // Ctrl+D: Date Picker
             KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
                 let should_open = matches!(
                     &app.active_modal,
@@ -367,15 +423,101 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<()> {
                         ..
                     })
                 );
-
                 if should_open {
                     app.open_date_picker();
                 }
             }
-            _ => {
-                app.on_modal_input(key);
+            // Category Nav in Edit Mode
+            KeyCode::Left => {
+                if let Some(ActiveModal::Task {
+                    focus: TaskFocus::Category,
+                    category_idx,
+                    modified,
+                    ..
+                }) = &mut app.active_modal
+                {
+                    if *category_idx > 0 {
+                        *category_idx -= 1;
+                        *modified = true;
+                    }
+                } else {
+                    app.on_task_modal_input(key);
+                }
             }
-        },
+            KeyCode::Right => {
+                if let Some(ActiveModal::Task {
+                    focus: TaskFocus::Category,
+                    category_idx,
+                    modified,
+                    ..
+                }) = &mut app.active_modal
+                {
+                    if *category_idx < app.categories.len().saturating_sub(1) {
+                        *category_idx += 1;
+                        *modified = true;
+                    }
+                } else {
+                    app.on_task_modal_input(key);
+                }
+            }
+            _ => app.on_task_modal_input(key),
+        }
+    } else {
+        // LAYER 1: NAVIGATION
+        match key.code {
+            KeyCode::Esc => app.try_close_task_modal(), // Triggers Save Prompt
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => app.cycle_modal_focus(false),
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => app.cycle_modal_focus(true),
+            KeyCode::Enter => app.toggle_task_edit_mode(), // Enter Edit Mode
+            KeyCode::Char('s') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                app.save_modal_data()?;
+            }
+            // Category selection in Nav mode
+            KeyCode::Left => {
+                if let Some(ActiveModal::Task {
+                    category_idx,
+                    modified,
+                    ..
+                }) = &mut app.active_modal
+                    && *category_idx > 0
+                {
+                    *category_idx -= 1;
+                    *modified = true;
+                }
+            }
+            KeyCode::Right => {
+                if let Some(ActiveModal::Task {
+                    category_idx,
+                    modified,
+                    ..
+                }) = &mut app.active_modal
+                    && *category_idx < app.categories.len().saturating_sub(1)
+                {
+                    *category_idx += 1;
+                    *modified = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn handle_standard_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => app.close_modal(),
+        KeyCode::Tab => app.cycle_modal_focus(false),
+        KeyCode::BackTab => app.cycle_modal_focus(true),
+        KeyCode::Char('s') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            app.save_modal_data()?;
+        }
+        // Enter key triggers save for standard modals
+        KeyCode::Enter => {
+            app.save_modal_data()?;
+        }
+        _ => {
+            app.on_modal_input(key);
+        }
     }
     Ok(())
 }
@@ -647,7 +789,7 @@ mod tests {
         let (task_rect, _) = task_hit_zone.unwrap();
         // Click inside the task's rect
         let click_x = task_rect.x + 1;
-        let click_y = task_rect.y; // FIX: Don't add 1 to Y if height might be small, or ensure it's within bounds
+        let click_y = task_rect.y;
 
         let mouse_event = MouseEvent {
             kind: MouseEventKind::Down(event::MouseButton::Left),
@@ -703,7 +845,6 @@ mod tests {
 
         let (board_rect, _) = board_selector_hit_zone.unwrap();
 
-        // FIX: Click inside the rect. Since height is 1, y must be exactly board_rect.y
         let click_x = board_rect.x + 1;
         let click_y = board_rect.y;
 
