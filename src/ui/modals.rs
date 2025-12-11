@@ -1,5 +1,5 @@
 use super::centered_rect;
-use crate::app::{ActiveModal, App, BoardFocus, CategoryFocus, ModalType, TaskFocus};
+use crate::app::{ActiveModal, App, BoardFocus, COLOR_PALETTE, CategoryFocus, ModalType, TaskFocus};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -42,19 +42,13 @@ pub fn render(f: &mut Frame, app: &App, modal: &ActiveModal) {
             render_simple_modal(f, area, title, vec![("Name", name)], None);
         }
         ActiveModal::Category {
-            name, color, focus, ..
+            name,
+            color,
+            focus,
+            palette_idx,
+            ..
         } => {
-            let active_idx = match focus {
-                CategoryFocus::Name => 0,
-                CategoryFocus::Color => 1,
-            };
-            render_simple_modal(
-                f,
-                area,
-                " Category Details ",
-                vec![("Name", name), ("Color (Hex e.g. #FF0000)", color)],
-                Some(active_idx),
-            );
+            render_category_modal(f, area, name, color, focus, *palette_idx);
         }
         ActiveModal::Board {
             name,
@@ -282,4 +276,117 @@ fn render_simple_modal(
         "Ctrl+S/Enter: Save | ESC: Cancel"
     };
     f.render_widget(Paragraph::new(help_text), layout[help_idx]);
+}
+
+fn render_category_modal(
+    f: &mut Frame,
+    area: Rect,
+    name: &TextArea,
+    color: &TextArea,
+    focus: &CategoryFocus,
+    palette_idx: usize,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::DarkGray))
+        .title(" Category Details ");
+    f.render_widget(block, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Length(3), // Name
+            Constraint::Length(3), // Color Text (Read only/Manual)
+            Constraint::Min(4),    // Palette Grid
+            Constraint::Length(1), // Help
+        ])
+        .split(area);
+
+    let active_style = Style::default().fg(Color::Yellow);
+    let inactive_style = Style::default().fg(Color::White);
+
+    // 1. Name Input
+    let mut name_widget = name.clone();
+    name_widget.set_block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Name")
+            .border_style(if *focus == CategoryFocus::Name {
+                active_style
+            } else {
+                inactive_style
+            }),
+    );
+    f.render_widget(&name_widget, layout[0]);
+
+    // 2. Color Hex Input (Synced with palette)
+    let mut color_widget = color.clone();
+    color_widget.set_block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Color (Hex)")
+            .border_style(if *focus == CategoryFocus::Color {
+                active_style
+            } else {
+                inactive_style
+            }),
+    );
+    f.render_widget(&color_widget, layout[1]);
+
+    // 3. Palette Grid
+    let palette_area = layout[2];
+    let grid_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Length(2)]) // 2 Rows
+        .split(palette_area);
+
+    // Row 1 (Colors 0-5)
+    let row1 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 6); 6])
+        .split(grid_layout[0]);
+
+    // Row 2 (Colors 6-11)
+    let row2 = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 6); 6])
+        .split(grid_layout[1]);
+
+    for (i, &col_val) in COLOR_PALETTE.iter().enumerate() {
+        let rect = if i < 6 { row1[i] } else { row2[i - 6] };
+
+        let is_selected = i == palette_idx;
+        let border_style = if is_selected && *focus == CategoryFocus::Color {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else if is_selected {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().bg(col_val))
+            .border_style(border_style);
+
+        // If selected, draw a checkmark or indicator inside
+        if is_selected {
+            let inner = Paragraph::new("●")
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(Style::default().fg(Color::Black).bg(col_val)); // Contrast
+            f.render_widget(inner.block(block), rect);
+        } else {
+            f.render_widget(block, rect);
+        }
+    }
+
+    // 4. Help
+    let help_text = "TAB: Switch Field | Arrows: Pick Color | Enter: Save";
+    f.render_widget(
+        Paragraph::new(help_text).style(Style::default().fg(Color::Gray)),
+        layout[3],
+    );
 }

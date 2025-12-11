@@ -13,6 +13,40 @@ use crate::{
     models::{Board, Category, Column, LogEvent, Task},
 };
 
+pub const COLOR_PALETTE: [Color; 12] = [
+    Color::Red,
+    Color::Green,
+    Color::Yellow,
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::LightRed,
+    Color::LightGreen,
+    Color::LightYellow,
+    Color::LightBlue,
+    Color::LightMagenta,
+    Color::LightCyan,
+];
+
+pub fn color_to_hex(color: Color) -> String {
+    match color {
+        Color::Red => "#FF0000",
+        Color::Green => "#00FF00",
+        Color::Yellow => "#FFFF00",
+        Color::Blue => "#0000FF",
+        Color::Magenta => "#FF00FF",
+        Color::Cyan => "#00FFFF",
+        Color::LightRed => "#FF5555",
+        Color::LightGreen => "#55FF55",
+        Color::LightYellow => "#FFFF55",
+        Color::LightBlue => "#5555FF",
+        Color::LightMagenta => "#FF55FF",
+        Color::LightCyan => "#55FFFF",
+        _ => "#FFFFFF",
+    }
+    .to_string()
+}
+
 #[derive(Clone)]
 pub struct TaskWithContext {
     pub inner: Task,
@@ -76,6 +110,7 @@ pub enum ActiveModal<'a> {
         color: Box<TextArea<'a>>,
         focus: CategoryFocus,
         mode: ModalType,
+        palette_idx: usize,
     },
     Board {
         name: Box<TextArea<'a>>,
@@ -690,18 +725,22 @@ impl<'a> App<'a> {
                 .borders(ratatui::widgets::Borders::ALL)
                 .title("Category Name"),
         );
-        let mut color = TextArea::default();
-        color.set_placeholder_text("#RRGGBB");
+
+        // Default to first color in palette
+        let default_idx = 0;
+        let mut color = TextArea::from(vec![color_to_hex(COLOR_PALETTE[default_idx])]);
         color.set_block(
             ratatui::widgets::Block::default()
                 .borders(ratatui::widgets::Borders::ALL)
-                .title("Color (Hex)"),
+                .title("Color"),
         );
+
         self.active_modal = Some(ActiveModal::Category {
             name: Box::new(name),
             color: Box::new(color),
             focus: CategoryFocus::Name,
             mode: ModalType::CategoryNew,
+            palette_idx: default_idx,
         });
         self.input_mode = InputMode::Editing;
     }
@@ -714,17 +753,27 @@ impl<'a> App<'a> {
                     .borders(ratatui::widgets::Borders::ALL)
                     .title("Category Name"),
             );
+
             let mut color = TextArea::from(cat.color.lines());
             color.set_block(
                 ratatui::widgets::Block::default()
                     .borders(ratatui::widgets::Borders::ALL)
-                    .title("Color (Hex)"),
+                    .title("Color"),
             );
+
+            // Try to find existing color in palette, otherwise default to 0
+            let current_color = self.hex_to_color(&cat.color);
+            let palette_idx = COLOR_PALETTE
+                .iter()
+                .position(|&c| c == current_color)
+                .unwrap_or(0);
+
             self.active_modal = Some(ActiveModal::Category {
                 name: Box::new(name),
                 color: Box::new(color),
                 focus: CategoryFocus::Name,
                 mode: ModalType::CategoryEdit(cat.id),
+                palette_idx,
             });
             self.input_mode = InputMode::Editing;
         }
@@ -868,20 +917,62 @@ impl<'a> App<'a> {
     pub fn on_modal_input(&mut self, key: ratatui::crossterm::event::KeyEvent) {
         if let Some(modal) = &mut self.active_modal {
             match modal {
-                ActiveModal::Task { .. } => {
-                    // Task modal input is handled by on_task_modal_input
-                }
+                ActiveModal::Task { .. } => {}
                 ActiveModal::Column { name, .. } => {
                     name.input(key);
                 }
+                // Handle palette navigation
                 ActiveModal::Category {
-                    name, color, focus, ..
+                    name,
+                    color,
+                    focus,
+                    palette_idx,
+                    ..
                 } => match focus {
                     CategoryFocus::Name => {
                         name.input(key);
                     }
                     CategoryFocus::Color => {
-                        color.input(key);
+                        // Intercept arrow keys for palette navigation
+                        use ratatui::crossterm::event::KeyCode;
+                        let mut changed = false;
+                        match key.code {
+                            KeyCode::Left => {
+                                if *palette_idx > 0 {
+                                    *palette_idx -= 1;
+                                    changed = true;
+                                }
+                            }
+                            KeyCode::Right => {
+                                if *palette_idx < COLOR_PALETTE.len() - 1 {
+                                    *palette_idx += 1;
+                                    changed = true;
+                                }
+                            }
+                            KeyCode::Up => {
+                                if *palette_idx >= 6 {
+                                    *palette_idx -= 6; // Move up one row (assuming width 6)
+                                    changed = true;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if *palette_idx + 6 < COLOR_PALETTE.len() {
+                                    *palette_idx += 6; // Move down one row
+                                    changed = true;
+                                }
+                            }
+                            _ => {
+                                // Allow manual typing if they really want to
+                                color.input(key);
+                            }
+                        }
+
+                        // If palette changed, update the text area automatically
+                        if changed {
+                            let new_hex = color_to_hex(COLOR_PALETTE[*palette_idx]);
+                            // Replace text area content
+                            *color = Box::new(TextArea::from(vec![new_hex]));
+                        }
                     }
                 },
                 ActiveModal::Board {
