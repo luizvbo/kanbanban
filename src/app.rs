@@ -63,7 +63,6 @@ pub enum ActiveModal<'a> {
         category_idx: usize,
         focus: TaskFocus,
         mode: ModalType,
-        // NEW FIELDS
         is_editing: bool,
         modified: bool,
         show_confirm: bool,
@@ -929,10 +928,10 @@ impl<'a> App<'a> {
                     if !t.trim().is_empty() {
                         match mode {
                             ModalType::TaskNew => {
-                                if let Some(col) = self.columns.get(self.selected_column_index) {
-                                    if let Some(board) = self.boards.get(self.active_board_index) {
-                                        self.db.create_task(board.id, col.id, t, d, due, cat_id)?;
-                                    }
+                                if let Some(col) = self.columns.get(self.selected_column_index)
+                                    && let Some(board) = self.boards.get(self.active_board_index)
+                                {
+                                    self.db.create_task(board.id, col.id, t, d, due, cat_id)?;
                                 }
                             }
                             ModalType::TaskEdit(id) => {
@@ -946,17 +945,17 @@ impl<'a> App<'a> {
                 }
                 ActiveModal::Column { name, mode } => {
                     let n = name.lines().join("");
-                    if !n.trim().is_empty() {
-                        if let Some(board) = self.boards.get(self.active_board_index) {
-                            match mode {
-                                ModalType::ColumnNew => {
-                                    self.db.create_column(n, board.id)?;
-                                }
-                                ModalType::ColumnEdit(id) => {
-                                    self.db.update_column(board.id, *id, n)?;
-                                }
-                                _ => {}
+                    if !n.trim().is_empty()
+                        && let Some(board) = self.boards.get(self.active_board_index)
+                    {
+                        match mode {
+                            ModalType::ColumnNew => {
+                                self.db.create_column(n, board.id)?;
                             }
+                            ModalType::ColumnEdit(id) => {
+                                self.db.update_column(board.id, *id, n)?;
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1003,14 +1002,14 @@ impl<'a> App<'a> {
 
     pub fn delete_current_column(&mut self) -> Result<()> {
         // Nested if let to avoid unstable let chains
-        if let Some(col) = self.columns.get(self.selected_column_index) {
-            if let Some(board) = self.boards.get(self.active_board_index) {
-                self.db.delete_column(board.id, col.id)?;
-                if self.selected_column_index > 0 {
-                    self.selected_column_index -= 1;
-                }
-                self.refresh_data()?;
+        if let Some(col) = self.columns.get(self.selected_column_index)
+            && let Some(board) = self.boards.get(self.active_board_index)
+        {
+            self.db.delete_column(board.id, col.id)?;
+            if self.selected_column_index > 0 {
+                self.selected_column_index -= 1;
             }
+            self.refresh_data()?;
         }
         Ok(())
     }

@@ -74,10 +74,10 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
                     let is_task_selected = is_col_selected && j == app.selected_task_index;
 
                     let mut cat_color = Color::White;
-                    if let Some(cid) = task.inner.category_id {
-                        if let Some(c) = app.category_map.get(&cid) {
-                            cat_color = *c;
-                        }
+                    if let Some(cid) = task.inner.category_id
+                        && let Some(c) = app.category_map.get(&cid)
+                    {
+                        cat_color = *c;
                     }
 
                     let border_style = if is_task_selected {
