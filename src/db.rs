@@ -23,7 +23,7 @@ impl Database {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("kanbanban");
-        let log_file_name = format!("{}_audit.jsonl", file_stem);
+        let log_file_name = format!("{file_stem}_audit.jsonl");
         let log_file_path = file_path.with_file_name(log_file_name);
 
         let mut data = if file_path.exists() {
@@ -101,10 +101,9 @@ impl Database {
             .create(true)
             .append(true)
             .open(&self.log_file_path)
+            && let Ok(json_line) = serde_json::to_string(&event)
         {
-            if let Ok(json_line) = serde_json::to_string(&event) {
-                let _ = writeln!(file, "{}", json_line);
-            }
+            let _ = writeln!(file, "{json_line}");
         }
     }
 
@@ -132,6 +131,7 @@ impl Database {
                     }
                     buffer.push_back(event);
                 }
+                buffer.push_back(event);
             }
         }
 
@@ -298,6 +298,7 @@ impl Database {
     pub fn delete_category(&mut self, id: u64) -> Result<()> {
         if let Some(idx) = self.data.categories.iter().position(|c| c.id == id) {
             self.data.categories.remove(idx);
+            // Reset tasks that had this category
             for board in &mut self.data.boards {
                 for col in &mut board.columns {
                     for task in &mut col.tasks {
@@ -396,6 +397,7 @@ impl Database {
             let finish_col = board.finish_column_id;
             let reset_col = board.reset_column_id;
 
+            // 1. Remove from old column
             for col in &mut board.columns {
                 if let Some(idx) = col.tasks.iter().position(|t| t.id == task_id) {
                     task_opt = Some(col.tasks.remove(idx));
@@ -403,6 +405,7 @@ impl Database {
                 }
             }
 
+            // 2. Insert into new column and update dates (Status Logic)
             if let Some(mut task) = task_opt {
                 let now = Local::now().naive_local();
 
@@ -410,6 +413,7 @@ impl Database {
                     task.start_date = Some(now);
                     task.finish_date = None;
                 } else if Some(target_col_id) == finish_col {
+                    // If moving to finish, ensure start date exists (use creation if not)
                     if task.start_date.is_none() {
                         task.start_date = Some(task.creation_date);
                     }
