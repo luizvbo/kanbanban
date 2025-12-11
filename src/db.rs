@@ -19,7 +19,6 @@ pub struct Database {
 impl Database {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file_path = path.as_ref().to_path_buf();
-
         let file_stem = file_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -27,7 +26,6 @@ impl Database {
         let log_file_name = format!("{file_stem}_audit.jsonl");
         let log_file_path = file_path.with_file_name(log_file_name);
 
-        // Try to load existing data
         let mut data = if file_path.exists() {
             let content = fs::read_to_string(&file_path)?;
             if content.trim().is_empty() {
@@ -39,7 +37,6 @@ impl Database {
             DataStore::default()
         };
 
-        // Initialize default board if no boards exist
         if data.boards.is_empty() {
             data.boards.push(Board {
                 id: Self::gen_id(),
@@ -100,7 +97,6 @@ impl Database {
             description: desc.to_string(),
         };
 
-        // Append-only write to JSONL
         if let Ok(mut file) = OpenOptions::new()
             .create(true)
             .append(true)
@@ -137,12 +133,11 @@ impl Database {
             }
         }
 
-        // Return reversed so newest is first in the list/UI
         let mut logs: Vec<LogEvent> = buffer.into();
         logs.reverse();
         logs
     }
-    // --- Board Management ---
+
     pub fn create_board(&mut self, name: String, icon: String) -> Result<()> {
         let board = Board {
             id: Self::gen_id(),
@@ -197,7 +192,6 @@ impl Database {
         Ok(())
     }
 
-    // --- Column Management ---
     pub fn create_column(&mut self, name: String, board_id: u64) -> Result<()> {
         if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
             let col = Column {
@@ -228,7 +222,6 @@ impl Database {
             && let Some(idx) = board.columns.iter().position(|c| c.id == column_id)
         {
             let col_name = board.columns[idx].name.clone();
-            // Prevent deleting if tasks exist (optional safety)
             if !board.columns[idx].tasks.is_empty() {
                 return Err(anyhow::anyhow!("Cannot delete non-empty column"));
             }
@@ -281,7 +274,6 @@ impl Database {
         Ok(())
     }
 
-    // --- Category Management ---
     pub fn create_category(&mut self, name: String, color: String) -> Result<()> {
         let cat = Category {
             id: Self::gen_id(),
@@ -305,7 +297,6 @@ impl Database {
     pub fn delete_category(&mut self, id: u64) -> Result<()> {
         if let Some(idx) = self.data.categories.iter().position(|c| c.id == id) {
             self.data.categories.remove(idx);
-            // Reset tasks that had this category
             for board in &mut self.data.boards {
                 for col in &mut board.columns {
                     for task in &mut col.tasks {
@@ -320,7 +311,6 @@ impl Database {
         Ok(())
     }
 
-    // --- Task Management ---
     pub fn create_task(
         &mut self,
         board_id: u64,
@@ -404,7 +394,6 @@ impl Database {
             let finish_col = board.finish_column_id;
             let reset_col = board.reset_column_id;
 
-            // 1. Remove from old column
             for col in &mut board.columns {
                 if let Some(idx) = col.tasks.iter().position(|t| t.id == task_id) {
                     task_opt = Some(col.tasks.remove(idx));
@@ -412,7 +401,6 @@ impl Database {
                 }
             }
 
-            // 2. Insert into new column and update dates (Status Logic)
             if let Some(mut task) = task_opt {
                 let now = Local::now().naive_local();
 
@@ -420,7 +408,6 @@ impl Database {
                     task.start_date = Some(now);
                     task.finish_date = None;
                 } else if Some(target_col_id) == finish_col {
-                    // If moving to finish, ensure start date exists (use creation if not)
                     if task.start_date.is_none() {
                         task.start_date = Some(task.creation_date);
                     }

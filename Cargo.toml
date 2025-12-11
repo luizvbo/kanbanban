@@ -1,6 +1,6 @@
 [package]
 name = "kanbanban"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 repository = "https://github.com/luizvbo/kanbanban"
 
@@ -27,3 +27,6 @@ tempfile = "3.23.0"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[workspace.metadata.typos.default.extend-words]
+ratatui = "ratatui"

@@ -63,7 +63,6 @@ pub enum ActiveModal<'a> {
         category_idx: usize,
         focus: TaskFocus,
         mode: ModalType,
-        // NEW FIELDS
         is_editing: bool,
         modified: bool,
         show_confirm: bool,
@@ -929,14 +928,16 @@ impl<'a> App<'a> {
                     if !t.trim().is_empty() {
                         match mode {
                             ModalType::TaskNew => {
-                                if let Some(col) = self.columns.get(self.selected_column_index) {
-                                    let board = &self.boards[self.active_board_index];
+                                if let Some(col) = self.columns.get(self.selected_column_index)
+                                    && let Some(board) = self.boards.get(self.active_board_index)
+                                {
                                     self.db.create_task(board.id, col.id, t, d, due, cat_id)?;
                                 }
                             }
                             ModalType::TaskEdit(id) => {
-                                let board = &self.boards[self.active_board_index];
-                                self.db.update_task(board.id, *id, t, d, due, cat_id)?;
+                                if let Some(board) = self.boards.get(self.active_board_index) {
+                                    self.db.update_task(board.id, *id, t, d, due, cat_id)?;
+                                }
                             }
                             _ => {}
                         }
@@ -949,13 +950,12 @@ impl<'a> App<'a> {
                     {
                         match mode {
                             ModalType::ColumnNew => {
-                                // Was implicitly new before
                                 self.db.create_column(n, board.id)?;
                             }
                             ModalType::ColumnEdit(id) => {
                                 self.db.update_column(board.id, *id, n)?;
                             }
-                            _ => {} // Should not happen
+                            _ => {}
                         }
                     }
                 }
@@ -1001,6 +1001,7 @@ impl<'a> App<'a> {
     }
 
     pub fn delete_current_column(&mut self) -> Result<()> {
+        // Nested if let to avoid unstable let chains
         if let Some(col) = self.columns.get(self.selected_column_index)
             && let Some(board) = self.boards.get(self.active_board_index)
         {

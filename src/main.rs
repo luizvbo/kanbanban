@@ -28,8 +28,6 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Custom path to the database file or directory
-    /// If a directory is provided, 'kanbanban.yaml' will be appended.
     #[arg(value_name = "PATH")]
     db_path: Option<PathBuf>,
 }
@@ -429,34 +427,44 @@ fn handle_task_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             // Category Nav in Edit Mode
             KeyCode::Left => {
+                // Nested check to avoid unstable let chains
+                let mut handled = false;
                 if let Some(ActiveModal::Task {
-                    focus: TaskFocus::Category,
+                    focus,
                     category_idx,
                     modified,
                     ..
                 }) = &mut app.active_modal
+                    && *focus == TaskFocus::Category
                 {
                     if *category_idx > 0 {
                         *category_idx -= 1;
                         *modified = true;
                     }
-                } else {
+                    handled = true;
+                }
+                if !handled {
                     app.on_task_modal_input(key);
                 }
             }
             KeyCode::Right => {
+                // Nested check to avoid unstable let chains
+                let mut handled = false;
                 if let Some(ActiveModal::Task {
-                    focus: TaskFocus::Category,
+                    focus,
                     category_idx,
                     modified,
                     ..
                 }) = &mut app.active_modal
+                    && *focus == TaskFocus::Category
                 {
                     if *category_idx < app.categories.len().saturating_sub(1) {
                         *category_idx += 1;
                         *modified = true;
                     }
-                } else {
+                    handled = true;
+                }
+                if !handled {
                     app.on_task_modal_input(key);
                 }
             }
