@@ -19,15 +19,13 @@ pub struct Database {
 impl Database {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file_path = path.as_ref().to_path_buf();
-
         let file_stem = file_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("kanbanban");
-        let log_file_name = format!("{file_stem}_audit.jsonl");
+        let log_file_name = format!("{}_audit.jsonl", file_stem);
         let log_file_path = file_path.with_file_name(log_file_name);
 
-        // Try to load existing data
         let mut data = if file_path.exists() {
             let content = fs::read_to_string(&file_path)?;
             if content.trim().is_empty() {
@@ -39,7 +37,6 @@ impl Database {
             DataStore::default()
         };
 
-        // Initialize default board if no boards exist
         if data.boards.is_empty() {
             data.boards.push(Board {
                 id: Self::gen_id(),
@@ -100,14 +97,14 @@ impl Database {
             description: desc.to_string(),
         };
 
-        // Append-only write to JSONL
         if let Ok(mut file) = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_file_path)
-            && let Ok(json_line) = serde_json::to_string(&event)
         {
-            let _ = writeln!(file, "{json_line}");
+            if let Ok(json_line) = serde_json::to_string(&event) {
+                let _ = writeln!(file, "{}", json_line);
+            }
         }
     }
 
@@ -124,25 +121,25 @@ impl Database {
         let reader = BufReader::new(file);
         let mut buffer: VecDeque<LogEvent> = VecDeque::with_capacity(limit);
 
-        for line in reader.lines().map_while(Result::ok) {
-            // Skip empty lines
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(event) = serde_json::from_str::<LogEvent>(&line) {
-                if buffer.len() == limit {
-                    buffer.pop_front();
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                if l.trim().is_empty() {
+                    continue;
                 }
-                buffer.push_back(event);
+                if let Ok(event) = serde_json::from_str::<LogEvent>(&l) {
+                    if buffer.len() == limit {
+                        buffer.pop_front();
+                    }
+                    buffer.push_back(event);
+                }
             }
         }
 
-        // Return reversed so newest is first in the list/UI
         let mut logs: Vec<LogEvent> = buffer.into();
         logs.reverse();
         logs
     }
-    // --- Board Management ---
+
     pub fn create_board(&mut self, name: String, icon: String) -> Result<()> {
         let board = Board {
             id: Self::gen_id(),
@@ -197,7 +194,6 @@ impl Database {
         Ok(())
     }
 
-    // --- Column Management ---
     pub fn create_column(&mut self, name: String, board_id: u64) -> Result<()> {
         if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
             let col = Column {
@@ -214,27 +210,26 @@ impl Database {
     }
 
     pub fn update_column(&mut self, board_id: u64, column_id: u64, name: String) -> Result<()> {
-        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id)
-            && let Some(col) = board.columns.iter_mut().find(|c| c.id == column_id)
-        {
-            col.name = name;
-            self.save()?;
+        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
+            if let Some(col) = board.columns.iter_mut().find(|c| c.id == column_id) {
+                col.name = name;
+                self.save()?;
+            }
         }
         Ok(())
     }
 
     pub fn delete_column(&mut self, board_id: u64, column_id: u64) -> Result<()> {
-        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id)
-            && let Some(idx) = board.columns.iter().position(|c| c.id == column_id)
-        {
-            let col_name = board.columns[idx].name.clone();
-            // Prevent deleting if tasks exist (optional safety)
-            if !board.columns[idx].tasks.is_empty() {
-                return Err(anyhow::anyhow!("Cannot delete non-empty column"));
+        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
+            if let Some(idx) = board.columns.iter().position(|c| c.id == column_id) {
+                let col_name = board.columns[idx].name.clone();
+                if !board.columns[idx].tasks.is_empty() {
+                    return Err(anyhow::anyhow!("Cannot delete non-empty column"));
+                }
+                board.columns.remove(idx);
+                self.log("DELETE", "Column", &format!("Deleted column '{col_name}'"));
+                self.save()?;
             }
-            board.columns.remove(idx);
-            self.log("DELETE", "Column", &format!("Deleted column '{col_name}'"));
-            self.save()?;
         }
         Ok(())
     }
@@ -245,22 +240,21 @@ impl Database {
         column_id: u64,
         visible: bool,
     ) -> Result<()> {
-        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id)
-            && let Some(col) = board.columns.iter_mut().find(|c| c.id == column_id)
-        {
-            col.visible = visible;
-            self.save()?;
+        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
+            if let Some(col) = board.columns.iter_mut().find(|c| c.id == column_id) {
+                col.visible = visible;
+                self.save()?;
+            }
         }
         Ok(())
     }
 
     pub fn swap_column_positions(&mut self, board_id: u64, idx1: usize, idx2: usize) -> Result<()> {
-        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id)
-            && idx1 < board.columns.len()
-            && idx2 < board.columns.len()
-        {
-            board.columns.swap(idx1, idx2);
-            self.save()?;
+        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
+            if idx1 < board.columns.len() && idx2 < board.columns.len() {
+                board.columns.swap(idx1, idx2);
+                self.save()?;
+            }
         }
         Ok(())
     }
@@ -281,7 +275,6 @@ impl Database {
         Ok(())
     }
 
-    // --- Category Management ---
     pub fn create_category(&mut self, name: String, color: String) -> Result<()> {
         let cat = Category {
             id: Self::gen_id(),
@@ -305,7 +298,6 @@ impl Database {
     pub fn delete_category(&mut self, id: u64) -> Result<()> {
         if let Some(idx) = self.data.categories.iter().position(|c| c.id == id) {
             self.data.categories.remove(idx);
-            // Reset tasks that had this category
             for board in &mut self.data.boards {
                 for col in &mut board.columns {
                     for task in &mut col.tasks {
@@ -320,7 +312,6 @@ impl Database {
         Ok(())
     }
 
-    // --- Task Management ---
     pub fn create_task(
         &mut self,
         board_id: u64,
@@ -330,26 +321,27 @@ impl Database {
         due: Option<String>,
         cat_id: Option<u64>,
     ) -> Result<()> {
-        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id)
-            && let Some(col) = board.columns.iter_mut().find(|c| c.id == col_id)
-        {
-            let now = Local::now().naive_local();
-            let due_date = due
-                .and_then(|d| chrono::NaiveDateTime::parse_from_str(&d, "%Y-%m-%d %H:%M:%S").ok());
+        if let Some(board) = self.data.boards.iter_mut().find(|b| b.id == board_id) {
+            if let Some(col) = board.columns.iter_mut().find(|c| c.id == col_id) {
+                let now = Local::now().naive_local();
+                let due_date = due.and_then(|d| {
+                    chrono::NaiveDateTime::parse_from_str(&d, "%Y-%m-%d %H:%M:%S").ok()
+                });
 
-            let task = Task {
-                id: Self::gen_id(),
-                title: title.clone(),
-                description: Some(desc),
-                category_id: cat_id,
-                creation_date: now,
-                start_date: None,
-                finish_date: None,
-                due_date,
-            };
-            col.tasks.push(task);
-            self.log("CREATE", "Task", &format!("Created task '{title}'"));
-            self.save()?;
+                let task = Task {
+                    id: Self::gen_id(),
+                    title: title.clone(),
+                    description: Some(desc),
+                    category_id: cat_id,
+                    creation_date: now,
+                    start_date: None,
+                    finish_date: None,
+                    due_date,
+                };
+                col.tasks.push(task);
+                self.log("CREATE", "Task", &format!("Created task '{title}'"));
+                self.save()?;
+            }
         }
         Ok(())
     }
@@ -404,7 +396,6 @@ impl Database {
             let finish_col = board.finish_column_id;
             let reset_col = board.reset_column_id;
 
-            // 1. Remove from old column
             for col in &mut board.columns {
                 if let Some(idx) = col.tasks.iter().position(|t| t.id == task_id) {
                     task_opt = Some(col.tasks.remove(idx));
@@ -412,7 +403,6 @@ impl Database {
                 }
             }
 
-            // 2. Insert into new column and update dates (Status Logic)
             if let Some(mut task) = task_opt {
                 let now = Local::now().naive_local();
 
@@ -420,7 +410,6 @@ impl Database {
                     task.start_date = Some(now);
                     task.finish_date = None;
                 } else if Some(target_col_id) == finish_col {
-                    // If moving to finish, ensure start date exists (use creation if not)
                     if task.start_date.is_none() {
                         task.start_date = Some(task.creation_date);
                     }

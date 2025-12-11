@@ -175,11 +175,10 @@ fn render_task_modal(
     };
 
     let mut cat_style = Style::default().fg(Color::White);
-    if !app.categories.is_empty()
-        && category_idx < app.categories.len()
-        && let Some(color) = app.category_map.get(&app.categories[category_idx].id)
-    {
-        cat_style = cat_style.fg(*color);
+    if !app.categories.is_empty() && category_idx < app.categories.len() {
+        if let Some(color) = app.category_map.get(&app.categories[category_idx].id) {
+            cat_style = cat_style.fg(*color);
+        }
     }
 
     let cat_selector = Paragraph::new(format!(" < {cat_name} > "))

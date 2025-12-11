@@ -429,34 +429,46 @@ fn handle_task_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
             }
             // Category Nav in Edit Mode
             KeyCode::Left => {
+                // Nested check to avoid unstable let chains
+                let mut handled = false;
                 if let Some(ActiveModal::Task {
-                    focus: TaskFocus::Category,
+                    focus,
                     category_idx,
                     modified,
                     ..
                 }) = &mut app.active_modal
                 {
-                    if *category_idx > 0 {
-                        *category_idx -= 1;
-                        *modified = true;
+                    if *focus == TaskFocus::Category {
+                        if *category_idx > 0 {
+                            *category_idx -= 1;
+                            *modified = true;
+                        }
+                        handled = true;
                     }
-                } else {
+                }
+                if !handled {
                     app.on_task_modal_input(key);
                 }
             }
             KeyCode::Right => {
+                // Nested check to avoid unstable let chains
+                let mut handled = false;
                 if let Some(ActiveModal::Task {
-                    focus: TaskFocus::Category,
+                    focus,
                     category_idx,
                     modified,
                     ..
                 }) = &mut app.active_modal
                 {
-                    if *category_idx < app.categories.len().saturating_sub(1) {
-                        *category_idx += 1;
-                        *modified = true;
+                    if *focus == TaskFocus::Category {
+                        if *category_idx < app.categories.len().saturating_sub(1) {
+                            *category_idx += 1;
+                            *modified = true;
+                        }
+                        handled = true;
                     }
-                } else {
+                }
+                if !handled {
                     app.on_task_modal_input(key);
                 }
             }
@@ -479,10 +491,11 @@ fn handle_task_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
                     modified,
                     ..
                 }) = &mut app.active_modal
-                    && *category_idx > 0
                 {
-                    *category_idx -= 1;
-                    *modified = true;
+                    if *category_idx > 0 {
+                        *category_idx -= 1;
+                        *modified = true;
+                    }
                 }
             }
             KeyCode::Right => {
@@ -491,10 +504,11 @@ fn handle_task_modal_keys(app: &mut App, key: KeyEvent) -> Result<()> {
                     modified,
                     ..
                 }) = &mut app.active_modal
-                    && *category_idx < app.categories.len().saturating_sub(1)
                 {
-                    *category_idx += 1;
-                    *modified = true;
+                    if *category_idx < app.categories.len().saturating_sub(1) {
+                        *category_idx += 1;
+                        *modified = true;
+                    }
                 }
             }
             _ => {}
