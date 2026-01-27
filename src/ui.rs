@@ -1,5 +1,6 @@
-use crate::app::{App, InputMode};
+use crate::app::{App, EditField, InputMode};
 use crate::types::Card;
+use chrono::{Local, NaiveDate};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use ratatui::{
     Frame,
@@ -10,7 +11,6 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    // FIX: Clear the entire frame area first to prevent artifacts
     f.render_widget(Clear, f.area());
 
     let chunks = Layout::default()
@@ -44,6 +44,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if let InputMode::Help = app.mode {
         draw_help_popup(f);
+    }
+
+    if let InputMode::Editing = app.mode {
+        draw_edit_popup(f, app);
+    }
+
+    if let InputMode::ExitingModal = app.mode {
+        draw_edit_popup(f, app);
+        draw_exit_confirmation(f);
     }
 }
 
@@ -123,9 +132,9 @@ fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
+            Constraint::Length(1), // Title
+            Constraint::Length(1), // Tags + Date
+            Constraint::Min(1),    // Description
         ])
         .split(inner);
 
@@ -137,24 +146,55 @@ fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool) {
         chunks[0],
     );
 
-    let tag_spans: Vec<Span> = card
-        .tags
-        .iter()
-        .map(|t| {
-            Span::styled(
-                format!(" #{} ", t.name),
-                Style::default().bg(Color::from(&t.color)).fg(Color::Black),
-            )
-        })
-        .collect();
+    // Tags + Due Date
+    let mut meta_spans = Vec::new();
 
-    let mut spaced_tags = Vec::new();
-    for tag in tag_spans {
-        spaced_tags.push(tag);
-        spaced_tags.push(Span::raw(" "));
+    if let Some(date_str) = &card.due_date {
+        let date_display = if let Ok(parsed_date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        {
+            let today = Local::now().date_naive();
+            let days_diff = (parsed_date - today).num_days();
+
+            let color = if days_diff < 0 {
+                Color::Red
+            } else if days_diff <= 2 {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+
+            let diff_text = if days_diff == 0 {
+                "Today".to_string()
+            } else if days_diff > 0 {
+                format!("in {}d", days_diff)
+            } else {
+                format!("{}d ago", days_diff.abs())
+            };
+
+            Span::styled(
+                format!("🕒 {} ({}) ", date_str, diff_text),
+                Style::default().fg(color),
+            )
+        } else {
+            Span::styled(
+                format!("🕒 {} ", date_str),
+                Style::default().fg(Color::DarkGray),
+            )
+        };
+        meta_spans.push(date_display);
     }
 
-    f.render_widget(Line::from(spaced_tags), chunks[1]);
+    for tag in &card.tags {
+        meta_spans.push(Span::styled(
+            format!(" #{} ", tag.name),
+            Style::default()
+                .bg(Color::from(&tag.color))
+                .fg(Color::Black),
+        ));
+        meta_spans.push(Span::raw(" "));
+    }
+
+    f.render_widget(Line::from(meta_spans), chunks[1]);
 
     let markdown_text = parse_markdown(&card.description);
     f.render_widget(
@@ -168,15 +208,26 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         InputMode::Normal => " NORMAL ",
         InputMode::Editing => " EDITING ",
         InputMode::Help => " HELP ",
+        InputMode::ExitingModal => " CONFIRM ",
     };
 
     let mode_color = match app.mode {
         InputMode::Normal => Color::Blue,
         InputMode::Editing => Color::Yellow,
         InputMode::Help => Color::Green,
+        InputMode::ExitingModal => Color::Red,
     };
 
-    let keys = " [q] Quit | [?] Help | [h/j/k/l] Navigate | [d] Delete | [i] Edit ";
+    let mut status_text =
+        " [q] Quit | [?] Help | [h/j/k/l] Navigate | [d] Delete | [a] Add | [i] Edit ".to_string();
+
+    if let Some(msg) = &app.status_message {
+        if let Some(time) = app.status_time {
+            if time.elapsed().as_secs() < 3 {
+                status_text = format!(" {} ", msg);
+            }
+        }
+    }
 
     let text = Line::from(vec![
         Span::styled(
@@ -186,7 +237,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(keys),
+        Span::raw(status_text),
     ]);
 
     f.render_widget(
@@ -215,12 +266,20 @@ fn draw_help_popup(f: &mut Frame) {
             Span::raw(": Move between cards"),
         ]),
         Line::from(vec![
+            Span::styled("H / L", Style::default().fg(Color::Cyan)),
+            Span::raw(": Move card Left/Right"),
+        ]),
+        Line::from(vec![
             Span::styled("d", Style::default().fg(Color::Red)),
             Span::raw(": Delete selected card"),
         ]),
         Line::from(vec![
+            Span::styled("a", Style::default().fg(Color::Green)),
+            Span::raw(": Add new card"),
+        ]),
+        Line::from(vec![
             Span::styled("i", Style::default().fg(Color::Green)),
-            Span::raw(": Edit card (Mock)"),
+            Span::raw(": Edit card"),
         ]),
         Line::from(vec![
             Span::styled("?", Style::default().fg(Color::Magenta)),
@@ -263,7 +322,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-// FIX: Added explicit lifetime <'_> to match the return type with input reference
 fn parse_markdown(content: &str) -> Text<'_> {
     let mut lines = Vec::new();
     let parser = Parser::new(content);
@@ -311,4 +369,132 @@ fn parse_markdown(content: &str) -> Text<'_> {
     }
 
     Text::from(lines)
+}
+
+fn draw_edit_popup(f: &mut Frame, app: &App) {
+    if let Some(state) = &app.edit_state {
+        let area = centered_rect(70, 80, f.area());
+        f.render_widget(Clear, area);
+
+        let block = Block::default()
+            .title(if state.is_new_card {
+                " New Card "
+            } else {
+                " Edit Card "
+            })
+            .borders(Borders::ALL)
+            .border_type(BorderType::Thick)
+            .style(Style::default().bg(Color::DarkGray));
+
+        f.render_widget(block.clone(), area);
+
+        let inner = block.inner(area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Title
+                Constraint::Length(3), // Tags
+                Constraint::Length(3), // Due Date
+                Constraint::Min(5),    // Description
+                Constraint::Length(1), // Help
+            ])
+            .split(inner);
+
+        // Helper to create styled input blocks
+        let create_input = |title, content, is_focused| {
+            Paragraph::new(content).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(if is_focused {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default()
+                    }),
+            )
+        };
+
+        // 1. Title
+        f.render_widget(
+            create_input(
+                "Title",
+                state.title.as_str(),
+                state.focused_field == EditField::Title,
+            ),
+            chunks[0],
+        );
+
+        // 2. Tags
+        f.render_widget(
+            create_input(
+                "Tags (comma separated)",
+                state.tags.as_str(),
+                state.focused_field == EditField::Tags,
+            ),
+            chunks[1],
+        );
+
+        // 3. Due Date
+        f.render_widget(
+            create_input(
+                "Due Date (YYYY-MM-DD)",
+                state.due_date.as_str(),
+                state.focused_field == EditField::DueDate,
+            ),
+            chunks[2],
+        );
+
+        // 4. Description
+        f.render_widget(
+            create_input(
+                "Description (Markdown)",
+                state.description.as_str(),
+                state.focused_field == EditField::Description,
+            )
+            .wrap(Wrap { trim: false }),
+            chunks[3],
+        );
+
+        // 5. Footer
+        f.render_widget(
+            Paragraph::new("TAB: Next Field | ENTER: Save (Newline in Desc) | ESC: Save/Discard"),
+            chunks[4],
+        );
+    }
+}
+
+fn draw_exit_confirmation(f: &mut Frame) {
+    let area = centered_rect(40, 20, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Red))
+        .title(" Unsaved Changes ");
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Save changes before closing?",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[Y] Yes (Save)", Style::default().fg(Color::Green)),
+            Span::raw("   "),
+            Span::styled("[n] No (Discard)", Style::default().fg(Color::Red)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    f.render_widget(paragraph, area);
 }

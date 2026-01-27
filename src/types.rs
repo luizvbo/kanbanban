@@ -42,8 +42,9 @@ pub struct Tag {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Card {
     pub title: String,
-    pub description: String, // Markdown content
+    pub description: String,
     pub tags: Vec<Tag>,
+    pub due_date: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,6 +80,7 @@ impl KanbanData {
                                 name: "Info".into(),
                                 color: TagColor::Blue,
                             }],
+                            due_date: None, // FIX: Added missing field
                         }],
                     },
                     Column {
@@ -101,19 +103,13 @@ impl KanbanData {
 
         let content = fs::read_to_string(path).context("Failed to read data file")?;
 
-        // Fix: Handle empty files or parsing errors gracefully
         if content.trim().is_empty() {
             return Ok(Self::default());
         }
 
         match serde_yaml::from_str(&content) {
             Ok(data) => Ok(data),
-            Err(_) => {
-                // If the file is corrupt or doesn't match the schema,
-                // fallback to default to prevent the app from crashing.
-                // In a real app, you might want to backup the corrupt file here.
-                Ok(Self::default())
-            }
+            Err(_) => Ok(Self::default()),
         }
     }
 

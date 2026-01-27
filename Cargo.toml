@@ -6,6 +6,7 @@ repository = "https://github.com/luizvbo/kanbanban"
 
 [dependencies]
 anyhow = "1.0.100"
+chrono = "0.4.43"
 crossterm = "0.29.0"
 directories = "6.0.0"
 pulldown-cmark = "0.13.0"
