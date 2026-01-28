@@ -1,42 +1,49 @@
 use anyhow::Result;
+use clap::Parser;
 use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use directories::ProjectDirs;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::stdout;
+use std::path::PathBuf;
 
 mod app;
 mod events;
-mod io;
 mod types;
-mod ui; // Ensure io module is linked
+mod ui;
 
 use app::App;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the kanban board file (defaults to ./kbb.yaml)
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
+}
+
 fn main() -> Result<()> {
-    // 1. Setup Terminal
+    // 1. Parse CLI Args
+    let args = Args::parse();
+
+    // 2. Setup Terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // FIX: Explicitly clear the terminal buffer to remove previous shell output
     terminal.clear()?;
 
-    // 2. Determine data path
-    let proj_dirs =
-        ProjectDirs::from("com", "rust", "kanban-tui").expect("Could not determine config dir");
-    let data_dir = proj_dirs.data_dir();
-    std::fs::create_dir_all(data_dir)?;
-    let data_path = data_dir.join("kanban.yaml");
+    // 3. Determine data path
+    // Default to "kbb.yaml" in the current directory if not provided
+    let data_path = args.path.unwrap_or_else(|| PathBuf::from("kbb.yaml"));
 
-    // 3. Initialize App
+    // 4. Initialize App
     let mut app = App::new(data_path)?;
 
-    // 4. Main Loop
+    // 5. Main Loop
     loop {
         terminal.draw(|f| {
             ui::draw(f, &mut app);
@@ -49,7 +56,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // 5. Cleanup
+    // 6. Cleanup
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;

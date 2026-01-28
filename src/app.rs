@@ -1,12 +1,13 @@
 use crate::types::{Card, KanbanData, Project, Tag, TagColor};
 use anyhow::Result;
 use std::path::PathBuf;
-use std::time::Instant; // Removed Duration, Local
+use std::time::Instant;
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum InputMode {
     Normal,
     Editing,
+    TagSelection,
     Help,
     ExitingModal,
 }
@@ -19,42 +20,87 @@ pub enum EditField {
     Description,
 }
 
+pub struct TagSelectorState {
+    pub available_tags: Vec<Tag>,
+    pub selected_indices: Vec<usize>,
+    pub current_index: usize,
+}
+
 pub struct EditState {
     pub title: String,
-    pub tags: String,
+    pub tags: Vec<Tag>,
     pub due_date: String,
     pub description: String,
     pub focused_field: EditField,
     pub is_new_card: bool,
+    pub cursor_position: usize,
+    pub scroll_x: u16,
+    pub scroll_y: u16,
+    pub description_edit_mode: bool,
 }
 
 impl EditState {
     fn from_card(card: &Card) -> Self {
-        let tags_str = card
-            .tags
-            .iter()
-            .map(|t| t.name.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
         Self {
             title: card.title.clone(),
-            tags: tags_str,
+            tags: card.tags.clone(),
             due_date: card.due_date.clone().unwrap_or_default(),
             description: card.description.clone(),
             focused_field: EditField::Title,
             is_new_card: false,
+            cursor_position: card.title.len(),
+            scroll_x: 0,
+            scroll_y: 0,
+            description_edit_mode: false,
         }
     }
 
     fn new() -> Self {
         Self {
             title: String::new(),
-            tags: String::new(),
+            tags: Vec::new(),
             due_date: String::new(),
             description: String::new(),
             focused_field: EditField::Title,
             is_new_card: true,
+            cursor_position: 0,
+            scroll_x: 0,
+            scroll_y: 0,
+            description_edit_mode: false,
         }
+    }
+
+    pub fn get_cursor_position_2d(&self, _width: u16) -> (u16, u16) {
+        let text = match self.focused_field {
+            EditField::Title => &self.title,
+            EditField::Tags => return (0, 0),
+            EditField::DueDate => &self.due_date,
+            EditField::Description => &self.description,
+        };
+
+        if self.focused_field != EditField::Description {
+            return (self.cursor_position as u16, 0);
+        }
+
+        let mut x = 0;
+        let mut y = 0;
+
+        for (i, c) in text.char_indices() {
+            if i == self.cursor_position {
+                return (x, y);
+            }
+            if c == '\n' {
+                x = 0;
+                y += 1;
+            } else {
+                if c == '\t' {
+                    x += 4;
+                } else {
+                    x += 1;
+                }
+            }
+        }
+        (x, y)
     }
 }
 
@@ -68,6 +114,7 @@ pub struct App {
     pub current_col_idx: usize,
     pub current_card_idx: usize,
     pub edit_state: Option<EditState>,
+    pub tag_selector_state: Option<TagSelectorState>, // NEW
     pub status_message: Option<String>,
     pub status_time: Option<Instant>,
 }
@@ -85,6 +132,7 @@ impl App {
             current_col_idx: 0,
             current_card_idx: 0,
             edit_state: None,
+            tag_selector_state: None,
             status_message: None,
             status_time: None,
         })
@@ -143,8 +191,75 @@ impl App {
         }
     }
 
-    // --- Actions ---
+    // --- Card Movement (Vertical) ---
+    pub fn move_card_up(&mut self) {
+        let col_idx = self.current_col_idx;
+        let card_idx = self.current_card_idx;
+        let project = self.current_project_mut();
+        let col = &mut project.columns[col_idx];
 
+        if card_idx > 0 && !col.cards.is_empty() {
+            col.cards.swap(card_idx, card_idx - 1);
+            self.current_card_idx -= 1;
+            self.save_with_feedback();
+        }
+    }
+
+    pub fn move_card_down(&mut self) {
+        let col_idx = self.current_col_idx;
+        let card_idx = self.current_card_idx;
+        let project = self.current_project_mut();
+        let col = &mut project.columns[col_idx];
+
+        if !col.cards.is_empty() && card_idx + 1 < col.cards.len() {
+            col.cards.swap(card_idx, card_idx + 1);
+            self.current_card_idx += 1;
+            self.save_with_feedback();
+        }
+    }
+
+    // --- Card Movement (Horizontal) ---
+    pub fn move_card_left(&mut self) {
+        let current_col_idx = self.current_col_idx;
+        if current_col_idx == 0 {
+            return;
+        }
+        self.move_card_internal(current_col_idx, current_col_idx - 1);
+    }
+
+    pub fn move_card_right(&mut self) {
+        let current_col_idx = self.current_col_idx;
+        let num_cols = self.current_project().columns.len();
+        if current_col_idx + 1 >= num_cols {
+            return;
+        }
+        self.move_card_internal(current_col_idx, current_col_idx + 1);
+    }
+
+    fn move_card_internal(&mut self, from_col: usize, to_col: usize) {
+        let card_idx = self.current_card_idx;
+        let card = {
+            let project = self.current_project_mut();
+            let from_column = &mut project.columns[from_col];
+            if from_column.cards.is_empty() {
+                return;
+            }
+            from_column.cards.remove(card_idx)
+        };
+
+        {
+            let project = self.current_project_mut();
+            project.columns[to_col].cards.push(card);
+        }
+
+        self.current_col_idx = to_col;
+        let project = self.current_project();
+        let new_len = project.columns[to_col].cards.len();
+        self.current_card_idx = if new_len > 0 { new_len - 1 } else { 0 };
+        self.save_with_feedback();
+    }
+
+    // --- Actions ---
     pub fn delete_current_card(&mut self) {
         let col_idx = self.current_col_idx;
         let card_idx = self.current_card_idx;
@@ -184,7 +299,6 @@ impl App {
     }
 
     // --- Modal Logic ---
-
     pub fn trigger_exit_modal(&mut self) {
         self.previous_mode = Some(self.mode);
         self.mode = InputMode::ExitingModal;
@@ -211,7 +325,6 @@ impl App {
     }
 
     // --- Editing Logic ---
-
     pub fn get_focused_field(&self) -> Option<EditField> {
         self.edit_state.as_ref().map(|s| s.focused_field)
     }
@@ -223,12 +336,10 @@ impl App {
 
     pub fn start_edit_card(&mut self) {
         let col = &self.current_project().columns[self.current_col_idx];
-
         if col.cards.is_empty() {
             self.start_new_card();
             return;
         }
-
         if let Some(card) = col.cards.get(self.current_card_idx) {
             self.edit_state = Some(EditState::from_card(card));
             self.mode = InputMode::Editing;
@@ -242,17 +353,6 @@ impl App {
 
     pub fn save_edit(&mut self) {
         if let Some(state) = self.edit_state.take() {
-            let tags: Vec<Tag> = state
-                .tags
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .map(|s| Tag {
-                    name: s.to_string(),
-                    color: TagColor::Gray,
-                })
-                .collect();
-
             let new_card = Card {
                 title: if state.title.is_empty() {
                     "Untitled".into()
@@ -260,7 +360,7 @@ impl App {
                     state.title.clone()
                 },
                 description: state.description.clone(),
-                tags,
+                tags: state.tags,
                 due_date: if state.due_date.is_empty() {
                     None
                 } else {
@@ -269,20 +369,16 @@ impl App {
             };
 
             let col_idx = self.current_col_idx;
-            let card_idx = self.current_card_idx; // FIX: Capture index before mutable borrow
+            let card_idx = self.current_card_idx;
             let is_new = state.is_new_card;
 
             {
                 let project = self.current_project_mut();
                 let col = &mut project.columns[col_idx];
-
                 if is_new {
                     col.cards.push(new_card);
-                } else {
-                    // Use the captured card_idx here
-                    if card_idx < col.cards.len() {
-                        col.cards[card_idx] = new_card;
-                    }
+                } else if card_idx < col.cards.len() {
+                    col.cards[card_idx] = new_card;
                 }
             }
 
@@ -292,44 +388,197 @@ impl App {
                     self.current_card_idx = len - 1;
                 }
             }
-
             self.save_with_feedback();
         }
         self.mode = InputMode::Normal;
     }
 
+    // --- Cursor & Text Editing ---
+    pub fn toggle_description_edit(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            if state.focused_field == EditField::Description {
+                state.description_edit_mode = !state.description_edit_mode;
+            }
+        }
+    }
+
     pub fn edit_input_char(&mut self, c: char) {
         if let Some(state) = &mut self.edit_state {
-            match state.focused_field {
-                EditField::Title => state.title.push(c),
-                EditField::Tags => state.tags.push(c),
-                EditField::DueDate => state.due_date.push(c),
-                EditField::Description => state.description.push(c),
+            if state.focused_field == EditField::Description && !state.description_edit_mode {
+                return;
+            }
+
+            let text = match state.focused_field {
+                EditField::Title => &mut state.title,
+                EditField::Tags => return,
+                EditField::DueDate => &mut state.due_date,
+                EditField::Description => &mut state.description,
+            };
+
+            // FIX: Normalize Carriage Return (\r) to Newline (\n)
+            // This prevents visual desync where cursor moves but text doesn't wrap.
+            let char_to_insert = if c == '\r' { '\n' } else { c };
+
+            if state.cursor_position >= text.len() {
+                text.push(char_to_insert);
+            } else {
+                text.insert(state.cursor_position, char_to_insert);
+            }
+
+            // Increment by the actual length of the inserted char
+            state.cursor_position += char_to_insert.len_utf8();
+        }
+    }
+
+    // NEW: Handle Tab key specifically
+    pub fn edit_input_tab(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            if state.focused_field == EditField::Description {
+                // Insert 2 spaces for Markdown indentation
+                let text = &mut state.description;
+                if state.cursor_position >= text.len() {
+                    text.push_str("  ");
+                } else {
+                    text.insert_str(state.cursor_position, "  ");
+                }
+                state.cursor_position += 2;
+            } else {
+                // For other fields, Tab cycles to next field
+                self.cycle_edit_field(false);
             }
         }
     }
 
     pub fn edit_input_backspace(&mut self) {
         if let Some(state) = &mut self.edit_state {
-            match state.focused_field {
-                EditField::Title => {
-                    state.title.pop();
+            // FIX: Prevent backspace in Description if not in edit mode
+            if state.focused_field == EditField::Description && !state.description_edit_mode {
+                return;
+            }
+
+            let text = match state.focused_field {
+                EditField::Title => &mut state.title,
+                EditField::Tags => return,
+                EditField::DueDate => &mut state.due_date,
+                EditField::Description => &mut state.description,
+            };
+
+            if state.cursor_position > 0 && !text.is_empty() {
+                let mut char_indices = text.char_indices();
+                let mut prev_idx = 0;
+                while let Some((idx, _)) = char_indices.next() {
+                    if idx >= state.cursor_position {
+                        break;
+                    }
+                    prev_idx = idx;
                 }
-                EditField::Tags => {
-                    state.tags.pop();
+                text.remove(prev_idx);
+                state.cursor_position = prev_idx;
+            }
+        }
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            if state.cursor_position > 0 {
+                let text = match state.focused_field {
+                    EditField::Title => &state.title,
+                    EditField::Tags => "",
+                    EditField::DueDate => &state.due_date,
+                    EditField::Description => &state.description,
+                };
+
+                // Move back by one char boundary
+                let mut char_indices = text.char_indices();
+                let mut prev_idx = 0;
+                while let Some((idx, _)) = char_indices.next() {
+                    if idx >= state.cursor_position {
+                        break;
+                    }
+                    prev_idx = idx;
                 }
-                EditField::DueDate => {
-                    state.due_date.pop();
+                state.cursor_position = prev_idx;
+            }
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            let text = match state.focused_field {
+                EditField::Title => &state.title,
+                EditField::Tags => "",
+                EditField::DueDate => &state.due_date,
+                EditField::Description => &state.description,
+            };
+
+            // Move forward by one char boundary
+            if let Some((idx, _)) = text
+                .char_indices()
+                .find(|(i, _)| *i == state.cursor_position)
+            {
+                // Find next char
+                let mut iter = text.char_indices();
+                while let Some((i, _)) = iter.next() {
+                    if i == idx {
+                        if let Some((next_i, _)) = iter.next() {
+                            state.cursor_position = next_i;
+                        } else {
+                            state.cursor_position = text.len();
+                        }
+                        break;
+                    }
                 }
-                EditField::Description => {
-                    state.description.pop();
-                }
+            } else if state.cursor_position < text.len() {
+                // Fallback
+                state.cursor_position += 1;
+            }
+        }
+    }
+
+    pub fn move_cursor_home(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            // If in description, move to start of LINE, not start of text
+            if state.focused_field == EditField::Description {
+                let text = &state.description;
+                let last_newline = text[..state.cursor_position]
+                    .rfind('\n')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                state.cursor_position = last_newline;
+            } else {
+                state.cursor_position = 0;
+            }
+        }
+    }
+
+    pub fn move_cursor_end(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            let text = match state.focused_field {
+                EditField::Title => &state.title,
+                EditField::Tags => "",
+                EditField::DueDate => &state.due_date,
+                EditField::Description => &state.description,
+            };
+
+            if state.focused_field == EditField::Description {
+                // Move to end of LINE
+                let next_newline = text[state.cursor_position..]
+                    .find('\n')
+                    .map(|i| state.cursor_position + i)
+                    .unwrap_or(text.len());
+                state.cursor_position = next_newline;
+            } else {
+                state.cursor_position = text.len();
             }
         }
     }
 
     pub fn cycle_edit_field(&mut self, reverse: bool) {
         if let Some(state) = &mut self.edit_state {
+            if state.focused_field == EditField::Description && state.description_edit_mode {
+                return;
+            }
+
             state.focused_field = if reverse {
                 match state.focused_field {
                     EditField::Title => EditField::Description,
@@ -345,60 +594,99 @@ impl App {
                     EditField::Description => EditField::Title,
                 }
             };
+
+            let text_len = match state.focused_field {
+                EditField::Title => state.title.len(),
+                EditField::Tags => 0,
+                EditField::DueDate => state.due_date.len(),
+                EditField::Description => state.description.len(),
+            };
+            state.cursor_position = text_len;
+            state.scroll_x = 0;
+            state.scroll_y = 0;
+            state.description_edit_mode = false;
         }
     }
 
-    // --- Move Card Logic ---
+    // --- Tag Selector Logic ---
+    pub fn open_tag_selector(&mut self) {
+        if let Some(state) = &self.edit_state {
+            // 1. Generate list of all possible tags (Defaults + Colors)
+            let mut available_tags = Vec::new();
 
-    pub fn move_card_left(&mut self) {
-        let current_col_idx = self.current_col_idx;
-        if current_col_idx == 0 {
-            return;
-        }
+            // Add some defaults
+            let defaults = vec![
+                "Bug", "Feature", "Urgent", "Docs", "Design", "Backend", "Frontend",
+            ];
+            let colors = TagColor::iterator().collect::<Vec<_>>();
 
-        let prev_col_idx = current_col_idx - 1;
-        self.move_card_internal(current_col_idx, prev_col_idx);
-    }
-
-    pub fn move_card_right(&mut self) {
-        let current_col_idx = self.current_col_idx;
-        let num_cols = self.current_project().columns.len();
-        if current_col_idx + 1 >= num_cols {
-            return;
-        }
-
-        let next_col_idx = current_col_idx + 1;
-        self.move_card_internal(current_col_idx, next_col_idx);
-    }
-
-    fn move_card_internal(&mut self, from_col: usize, to_col: usize) {
-        // 1. Capture index to avoid borrow conflict
-        let card_idx = self.current_card_idx;
-
-        // 2. Remove the card (Scope the borrow of self/project)
-        let card = {
-            let project = self.current_project_mut();
-            let from_column = &mut project.columns[from_col];
-            if from_column.cards.is_empty() {
-                return;
+            for (i, name) in defaults.iter().enumerate() {
+                available_tags.push(Tag {
+                    name: name.to_string(),
+                    color: colors[i % colors.len()].clone(),
+                });
             }
-            from_column.cards.remove(card_idx)
-        };
 
-        // 3. Add to new column (New borrow scope)
-        {
-            let project = self.current_project_mut();
-            project.columns[to_col].cards.push(card);
+            // 2. Determine which are currently selected
+            let mut selected_indices = Vec::new();
+            for (i, avail) in available_tags.iter().enumerate() {
+                if state.tags.iter().any(|t| t.name == avail.name) {
+                    selected_indices.push(i);
+                }
+            }
+
+            self.tag_selector_state = Some(TagSelectorState {
+                available_tags,
+                selected_indices,
+                current_index: 0,
+            });
+            self.mode = InputMode::TagSelection;
         }
+    }
 
-        // 4. Update selection logic (No mutable borrows active here)
-        self.current_col_idx = to_col;
+    pub fn close_tag_selector(&mut self) {
+        self.tag_selector_state = None;
+        self.mode = InputMode::Editing;
+    }
 
-        // Calculate new index safely
-        let project = self.current_project(); // Immutable borrow is fine now
-        let new_len = project.columns[to_col].cards.len();
-        self.current_card_idx = if new_len > 0 { new_len - 1 } else { 0 };
+    pub fn tag_selector_next(&mut self) {
+        if let Some(selector) = &mut self.tag_selector_state {
+            if selector.current_index + 1 < selector.available_tags.len() {
+                selector.current_index += 1;
+            }
+        }
+    }
 
-        self.save_with_feedback();
+    pub fn tag_selector_prev(&mut self) {
+        if let Some(selector) = &mut self.tag_selector_state {
+            if selector.current_index > 0 {
+                selector.current_index -= 1;
+            }
+        }
+    }
+
+    pub fn tag_selector_toggle(&mut self) {
+        if let Some(selector) = &mut self.tag_selector_state {
+            let idx = selector.current_index;
+            if let Some(pos) = selector.selected_indices.iter().position(|&x| x == idx) {
+                selector.selected_indices.remove(pos);
+            } else {
+                selector.selected_indices.push(idx);
+            }
+        }
+    }
+
+    pub fn tag_selector_confirm(&mut self) {
+        if let Some(selector) = &self.tag_selector_state {
+            if let Some(edit_state) = &mut self.edit_state {
+                edit_state.tags.clear();
+                for &idx in &selector.selected_indices {
+                    if let Some(tag) = selector.available_tags.get(idx) {
+                        edit_state.tags.push(tag.clone());
+                    }
+                }
+            }
+        }
+        self.close_tag_selector();
     }
 }

@@ -18,7 +18,7 @@ impl Config {
         map.insert("feature".to_string(), "Green".to_string());
         map.insert("urgent".to_string(), "Magenta".to_string());
         map.insert("info".to_string(), "Blue".to_string());
-        
+
         Self { tag_colors: map }
     }
 
@@ -39,7 +39,7 @@ impl Config {
         // 2. Fallback: Hash string to a stable color
         let hash: usize = tag_name.bytes().map(|b| b as usize).sum();
         let colors = [
-            Color::Red, Color::Green, Color::Yellow, Color::Blue, 
+            Color::Red, Color::Green, Color::Yellow, Color::Blue,
             Color::Magenta, Color::Cyan, Color::LightRed, Color::LightGreen
         ];
         colors[hash % colors.len()]

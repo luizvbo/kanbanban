@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum TagColor {
     Red,
     Green,
@@ -13,8 +13,33 @@ pub enum TagColor {
     Magenta,
     Cyan,
     White,
-    Black,
     Gray,
+    LightRed,
+    LightGreen,
+    LightBlue,
+    Orange,
+}
+
+impl TagColor {
+    // Helper for the selector UI
+    pub fn iterator() -> impl Iterator<Item = TagColor> {
+        [
+            TagColor::Red,
+            TagColor::Green,
+            TagColor::Blue,
+            TagColor::Yellow,
+            TagColor::Magenta,
+            TagColor::Cyan,
+            TagColor::White,
+            TagColor::Gray,
+            TagColor::LightRed,
+            TagColor::LightGreen,
+            TagColor::LightBlue,
+            TagColor::Orange,
+        ]
+        .iter()
+        .cloned()
+    }
 }
 
 impl From<&TagColor> for Color {
@@ -27,8 +52,11 @@ impl From<&TagColor> for Color {
             TagColor::Magenta => Color::Magenta,
             TagColor::Cyan => Color::Cyan,
             TagColor::White => Color::White,
-            TagColor::Black => Color::Black,
             TagColor::Gray => Color::DarkGray,
+            TagColor::LightRed => Color::LightRed,
+            TagColor::LightGreen => Color::LightGreen,
+            TagColor::LightBlue => Color::LightBlue,
+            TagColor::Orange => Color::Rgb(255, 165, 0),
         }
     }
 }
@@ -74,13 +102,12 @@ impl KanbanData {
                         title: "To Do".into(),
                         cards: vec![Card {
                             title: "Welcome".into(),
-                            description:
-                                "Press `?` for help.\n\n# Features\n- Vim keys\n- Markdown".into(),
+                            description: "Press `?` for help.".into(),
                             tags: vec![Tag {
                                 name: "Info".into(),
                                 color: TagColor::Blue,
                             }],
-                            due_date: None, // FIX: Added missing field
+                            due_date: None,
                         }],
                     },
                     Column {
@@ -100,13 +127,10 @@ impl KanbanData {
         if !path.exists() {
             return Ok(Self::default());
         }
-
         let content = fs::read_to_string(path).context("Failed to read data file")?;
-
         if content.trim().is_empty() {
             return Ok(Self::default());
         }
-
         match serde_yaml::from_str(&content) {
             Ok(data) => Ok(data),
             Err(_) => Ok(Self::default()),
