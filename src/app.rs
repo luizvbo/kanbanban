@@ -10,6 +10,7 @@ pub enum InputMode {
     TagSelection,
     Help,
     ExitingModal,
+    DeleteConfirmation,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -102,6 +103,78 @@ impl EditState {
         }
         (x, y)
     }
+
+    pub fn move_cursor_up(&mut self) {
+        if self.focused_field != EditField::Description {
+            return;
+        }
+
+        let text = &self.description;
+        let pos = self.cursor_position;
+
+        // 1. Find start of current line
+        let current_line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+
+        // 2. Calculate current column offset
+        let col_offset = pos - current_line_start;
+
+        if current_line_start == 0 {
+            // Already on first line, move to start
+            self.cursor_position = 0;
+            return;
+        }
+
+        // 3. Find start of previous line
+        let prev_line_end = current_line_start - 1;
+        let prev_line_start = text[..prev_line_end]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prev_line_len = prev_line_end - prev_line_start;
+
+        // 4. Move to same column in previous line, clamping to length
+        let new_col = std::cmp::min(col_offset, prev_line_len);
+        self.cursor_position = prev_line_start + new_col;
+    }
+
+    // NEW: Move cursor visually down
+    pub fn move_cursor_down(&mut self) {
+        if self.focused_field != EditField::Description {
+            return;
+        }
+
+        let text = &self.description;
+        let pos = self.cursor_position;
+
+        // 1. Find start of current line
+        let current_line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let col_offset = pos - current_line_start;
+
+        // 2. Find end of current line (start of next)
+        let next_newline = text[pos..].find('\n').map(|i| pos + i);
+
+        if let Some(newline_idx) = next_newline {
+            let next_line_start = newline_idx + 1;
+            if next_line_start >= text.len() {
+                self.cursor_position = text.len();
+                return;
+            }
+
+            // 3. Find length of next line
+            let next_line_end = text[next_line_start..]
+                .find('\n')
+                .map(|i| next_line_start + i)
+                .unwrap_or(text.len());
+            let next_line_len = next_line_end - next_line_start;
+
+            // 4. Move to same column
+            let new_col = std::cmp::min(col_offset, next_line_len);
+            self.cursor_position = next_line_start + new_col;
+        } else {
+            // On last line, move to end
+            self.cursor_position = text.len();
+        }
+    }
 }
 
 pub struct App {
@@ -114,7 +187,7 @@ pub struct App {
     pub current_col_idx: usize,
     pub current_card_idx: usize,
     pub edit_state: Option<EditState>,
-    pub tag_selector_state: Option<TagSelectorState>, // NEW
+    pub tag_selector_state: Option<TagSelectorState>,
     pub status_message: Option<String>,
     pub status_time: Option<Instant>,
 }
@@ -260,6 +333,24 @@ impl App {
     }
 
     // --- Actions ---
+    pub fn trigger_delete(&mut self) {
+        let col = &self.current_project().columns[self.current_col_idx];
+        if !col.cards.is_empty() {
+            self.mode = InputMode::DeleteConfirmation;
+        }
+    }
+
+    // NEW: Confirm Delete
+    pub fn confirm_delete(&mut self) {
+        self.delete_current_card();
+        self.mode = InputMode::Normal;
+    }
+
+    // NEW: Cancel Delete
+    pub fn cancel_delete(&mut self) {
+        self.mode = InputMode::Normal;
+    }
+
     pub fn delete_current_card(&mut self) {
         let col_idx = self.current_col_idx;
         let card_idx = self.current_card_idx;
@@ -475,6 +566,18 @@ impl App {
                 text.remove(prev_idx);
                 state.cursor_position = prev_idx;
             }
+        }
+    }
+
+    pub fn move_cursor_up(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            state.move_cursor_up();
+        }
+    }
+
+    pub fn move_cursor_down(&mut self) {
+        if let Some(state) = &mut self.edit_state {
+            state.move_cursor_down();
         }
     }
 

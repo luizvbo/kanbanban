@@ -1,3 +1,4 @@
+// FILE: ./src/events.rs
 use crate::app::{App, EditField, InputMode};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -17,7 +18,7 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                         KeyCode::Char('K') => app.move_card_up(),
                         KeyCode::Char('H') => app.move_card_left(),
                         KeyCode::Char('L') => app.move_card_right(),
-                        KeyCode::Char('d') => app.delete_current_card(),
+                        KeyCode::Char('d') => app.trigger_delete(), // CHANGED
                         KeyCode::Char('a') | KeyCode::Char('n') => app.start_new_card(),
                         KeyCode::Char('i') | KeyCode::Char('e') => app.start_edit_card(),
                         KeyCode::Char('?') => app.toggle_help(),
@@ -36,12 +37,21 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                         _ => {}
                     },
                     InputMode::ExitingModal => match key.code {
-                        // FIX: Added uppercase Y/N support
                         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                             app.confirm_exit_save()
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') => app.confirm_exit_discard(),
                         KeyCode::Esc => app.cancel_exit_modal(),
+                        _ => {}
+                    },
+                    // NEW: Delete Confirmation Handler
+                    InputMode::DeleteConfirmation => match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            app.confirm_delete()
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            app.cancel_delete()
+                        }
                         _ => {}
                     },
                     InputMode::Editing => match key.code {
@@ -86,8 +96,39 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                         KeyCode::Tab => app.edit_input_tab(),
                         KeyCode::BackTab => app.cycle_edit_field(true),
 
-                        KeyCode::Up => app.cycle_edit_field(true),
-                        KeyCode::Down => app.cycle_edit_field(false),
+                        // CHANGED: Handle Up/Down for cursor navigation in Description
+                        KeyCode::Up => {
+                            let is_desc_editing = app
+                                .edit_state
+                                .as_ref()
+                                .map(|s| {
+                                    s.focused_field == EditField::Description
+                                        && s.description_edit_mode
+                                })
+                                .unwrap_or(false);
+
+                            if is_desc_editing {
+                                app.move_cursor_up();
+                            } else {
+                                app.cycle_edit_field(true);
+                            }
+                        }
+                        KeyCode::Down => {
+                            let is_desc_editing = app
+                                .edit_state
+                                .as_ref()
+                                .map(|s| {
+                                    s.focused_field == EditField::Description
+                                        && s.description_edit_mode
+                                })
+                                .unwrap_or(false);
+
+                            if is_desc_editing {
+                                app.move_cursor_down();
+                            } else {
+                                app.cycle_edit_field(false);
+                            }
+                        }
 
                         KeyCode::Left => app.move_cursor_left(),
                         KeyCode::Right => app.move_cursor_right(),

@@ -40,20 +40,51 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_board(f, app, chunks[1]);
     draw_footer(f, app, chunks[2]);
 
-    if let InputMode::Help = app.mode {
-        draw_help_popup(f);
+    match app.mode {
+        InputMode::Help => draw_help_popup(f),
+        InputMode::Editing => draw_edit_popup(f, app),
+        InputMode::TagSelection => {
+            draw_edit_popup(f, app);
+            draw_tag_selector(f, app);
+        }
+        InputMode::ExitingModal => {
+            draw_edit_popup(f, app);
+            draw_exit_confirmation(f);
+        }
+        InputMode::DeleteConfirmation => draw_delete_confirmation(f),
+        _ => {}
     }
-    if let InputMode::Editing = app.mode {
-        draw_edit_popup(f, app);
-    }
-    if let InputMode::TagSelection = app.mode {
-        draw_edit_popup(f, app); // Draw background
-        draw_tag_selector(f, app);
-    }
-    if let InputMode::ExitingModal = app.mode {
-        draw_edit_popup(f, app);
-        draw_exit_confirmation(f);
-    }
+}
+
+fn draw_delete_confirmation(f: &mut Frame) {
+    let area = centered_rect(40, 20, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Red))
+        .title(" Delete Confirmation ");
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Are you sure you want to delete this card?",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[Y] Yes (Delete)", Style::default().fg(Color::Red)),
+            Span::raw("   "),
+            Span::styled("[n] No (Cancel)", Style::default().fg(Color::Green)),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    f.render_widget(paragraph, area);
 }
 
 fn draw_board(f: &mut Frame, app: &App, area: Rect) {
@@ -188,6 +219,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         InputMode::TagSelection => " TAGS ",
         InputMode::Help => " HELP ",
         InputMode::ExitingModal => " CONFIRM ",
+        // FIX: Handle the new variant
+        InputMode::DeleteConfirmation => " DELETE ",
     };
     let mode_color = match app.mode {
         InputMode::Normal => Color::Blue,
@@ -195,6 +228,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         InputMode::TagSelection => Color::Magenta,
         InputMode::Help => Color::Green,
         InputMode::ExitingModal => Color::Red,
+        // FIX: Handle the new variant
+        InputMode::DeleteConfirmation => Color::Red,
     };
     let mut status_text =
         " [q] Quit | [?] Help | [h/j/k/l] Navigate | [J/K] Move Up/Down | [a] Add | [i] Edit "
@@ -312,9 +347,26 @@ fn parse_markdown(content: &str) -> Text<'_> {
             Event::Start(Tag::Emphasis) => style = style.add_modifier(Modifier::ITALIC),
             Event::Start(Tag::Strong) => style = style.add_modifier(Modifier::BOLD),
             Event::Start(Tag::Heading { .. }) => {
+                // Ensure heading starts on new line
+                if !current_line_spans.is_empty() {
+                    lines.push(Line::from(current_line_spans.clone()));
+                    current_line_spans.clear();
+                }
                 style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
             }
+            // FIX: Ensure lists start on a new line
+            Event::Start(Tag::List(_)) => {
+                if !current_line_spans.is_empty() {
+                    lines.push(Line::from(current_line_spans.clone()));
+                    current_line_spans.clear();
+                }
+            }
+            // FIX: Ensure list items start on a new line
             Event::Start(Tag::Item) => {
+                if !current_line_spans.is_empty() {
+                    lines.push(Line::from(current_line_spans.clone()));
+                    current_line_spans.clear();
+                }
                 current_line_spans.push(Span::raw("• "));
             }
 
@@ -329,6 +381,13 @@ fn parse_markdown(content: &str) -> Text<'_> {
             Event::End(TagEnd::Item) => {
                 lines.push(Line::from(current_line_spans.clone()));
                 current_line_spans.clear();
+            }
+            // Handle explicit list end to ensure spacing if needed
+            Event::End(TagEnd::List(_)) => {
+                if !current_line_spans.is_empty() {
+                    lines.push(Line::from(current_line_spans.clone()));
+                    current_line_spans.clear();
+                }
             }
 
             Event::SoftBreak | Event::HardBreak => {
