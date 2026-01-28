@@ -134,36 +134,74 @@ fn draw_board(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool) {
-    let border_style = if is_selected {
-        Style::default()
-            .fg(Color::LightBlue)
-            .add_modifier(Modifier::BOLD)
+    // FIX: Improved Highlighting
+    // Use Thick borders and Yellow color for high visibility
+    let (border_style, border_type) = if is_selected {
+        (
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            BorderType::Thick,
+        )
     } else {
-        Style::default().fg(Color::DarkGray)
+        (Style::default().fg(Color::DarkGray), BorderType::Rounded)
     };
+
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(border_type)
         .border_style(border_style);
+
     let inner = block.inner(area);
     f.render_widget(block, area);
+
+    // Dynamic Layout: Title -> Tags -> Date -> Description
+    let mut constraints = vec![Constraint::Length(1)]; // 0: Title
+
+    let has_tags = !card.tags.is_empty();
+    if has_tags {
+        constraints.push(Constraint::Length(1)); // 1: Tags (New Line)
+    }
+
+    let has_date = card.due_date.is_some();
+    if has_date {
+        constraints.push(Constraint::Length(1)); // 2: Date (New Line)
+    }
+
+    constraints.push(Constraint::Min(1)); // Last: Description
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
+        .constraints(constraints)
         .split(inner);
+
+    let mut chunk_idx = 0;
+
+    // 1. Title
     f.render_widget(
         Paragraph::new(Span::styled(
             &card.title,
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        chunks[0],
+        chunks[chunk_idx],
     );
+    chunk_idx += 1;
 
-    let mut meta_spans = Vec::new();
+    // 2. Tags (Rendered on their own line)
+    if has_tags {
+        let mut tag_spans = Vec::new();
+        for tag in &card.tags {
+            tag_spans.push(Span::styled(
+                format!(" #{} ", tag.name),
+                Style::default().bg(tag.get_color()).fg(Color::Black),
+            ));
+            tag_spans.push(Span::raw(" "));
+        }
+        f.render_widget(Line::from(tag_spans), chunks[chunk_idx]);
+        chunk_idx += 1;
+    }
+
+    // 3. Due Date
     if let Some(date_str) = &card.due_date {
         let date_display = if let Ok(parsed_date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
         {
@@ -193,22 +231,15 @@ fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool) {
                 Style::default().fg(Color::DarkGray),
             )
         };
-        meta_spans.push(date_display);
+        f.render_widget(Paragraph::new(date_display), chunks[chunk_idx]);
+        chunk_idx += 1;
     }
-    for tag in &card.tags {
-        meta_spans.push(Span::styled(
-            format!(" #{} ", tag.name),
-            Style::default()
-                .bg(Color::from(&tag.color))
-                .fg(Color::Black),
-        ));
-        meta_spans.push(Span::raw(" "));
-    }
-    f.render_widget(Line::from(meta_spans), chunks[1]);
+
+    // 4. Description
     let markdown_text = parse_markdown(&card.description);
     f.render_widget(
         Paragraph::new(markdown_text).wrap(Wrap { trim: true }),
-        chunks[2],
+        chunks[chunk_idx],
     );
 }
 
@@ -635,36 +666,81 @@ fn draw_tag_selector(f: &mut Frame, app: &App) {
         let area = centered_rect(40, 50, f.area());
         f.render_widget(Clear, area);
 
+        // FIX: Updated Title to reflect that Esc saves
         let block = Block::default()
-            .title(" Select Tags ")
+            .title(" Select Tags (Enter: Toggle | Esc: Save & Close) ")
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::Black));
 
-        let items: Vec<ListItem> = selector
-            .available_tags
+        let inner_area = block.inner(area);
+        f.render_widget(block, area);
+
+        // ... rest of the function remains exactly the same
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Search Bar
+                Constraint::Min(1),    // List
+            ])
+            .split(inner_area);
+
+        // 1. Search Bar
+        let search_text = if selector.search_query.is_empty() {
+            Span::styled(
+                "Type to filter/create...",
+                Style::default().fg(Color::DarkGray),
+            )
+        } else {
+            Span::raw(&selector.search_query)
+        };
+
+        let search_block = Paragraph::new(search_text)
+            .block(Block::default().borders(Borders::BOTTOM).title(" Search "));
+        f.render_widget(search_block, chunks[0]);
+
+        // 2. Filtered List
+        let filtered = app.get_filtered_tags();
+        let mut items: Vec<ListItem> = filtered
             .iter()
             .enumerate()
-            .map(|(i, tag)| {
-                let is_selected = selector.selected_indices.contains(&i);
+            .map(|(view_idx, (real_idx, tag))| {
+                let is_selected = selector.selected_indices.contains(real_idx);
                 let checkbox = if is_selected { "[x] " } else { "[ ] " };
                 let content = format!("{}{}", checkbox, tag.name);
-                let style = if i == selector.current_index {
+
+                let style = if view_idx == selector.current_index {
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
-                // Show tag color preview
+
                 ListItem::new(Line::from(vec![
                     Span::styled(content, style),
                     Span::raw(" "),
-                    Span::styled("●", Style::default().fg(Color::from(&tag.color))),
+                    Span::styled("●", Style::default().fg(tag.get_color())),
                 ]))
             })
             .collect();
 
-        let list = List::new(items).block(block);
-        f.render_widget(list, area);
+        if !selector.search_query.is_empty() {
+            let is_highlighted = selector.current_index == filtered.len();
+            let style = if is_highlighted {
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            items.push(ListItem::new(Line::from(vec![Span::styled(
+                format!("+ Create tag \"{}\"", selector.search_query),
+                style,
+            )])));
+        }
+
+        let list = List::new(items);
+        f.render_widget(list, chunks[1]);
     }
 }

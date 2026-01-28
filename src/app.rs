@@ -1,4 +1,4 @@
-use crate::types::{Card, KanbanData, Project, Tag, TagColor};
+use crate::types::{Card, KanbanData, Project, Tag};
 use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -25,6 +25,7 @@ pub struct TagSelectorState {
     pub available_tags: Vec<Tag>,
     pub selected_indices: Vec<usize>,
     pub current_index: usize,
+    pub search_query: String, // NEW: User input
 }
 
 pub struct EditState {
@@ -714,21 +715,8 @@ impl App {
     // --- Tag Selector Logic ---
     pub fn open_tag_selector(&mut self) {
         if let Some(state) = &self.edit_state {
-            // 1. Generate list of all possible tags (Defaults + Colors)
-            let mut available_tags = Vec::new();
-
-            // Add some defaults
-            let defaults = vec![
-                "Bug", "Feature", "Urgent", "Docs", "Design", "Backend", "Frontend",
-            ];
-            let colors = TagColor::iterator().collect::<Vec<_>>();
-
-            for (i, name) in defaults.iter().enumerate() {
-                available_tags.push(Tag {
-                    name: name.to_string(),
-                    color: colors[i % colors.len()].clone(),
-                });
-            }
+            // 1. Load tags from global data
+            let available_tags = self.data.known_tags.clone();
 
             // 2. Determine which are currently selected
             let mut selected_indices = Vec::new();
@@ -742,8 +730,39 @@ impl App {
                 available_tags,
                 selected_indices,
                 current_index: 0,
+                search_query: String::new(),
             });
             self.mode = InputMode::TagSelection;
+        }
+    }
+
+    pub fn tag_selector_input_char(&mut self, c: char) {
+        if let Some(selector) = &mut self.tag_selector_state {
+            selector.search_query.push(c);
+            // Reset selection when searching to avoid out of bounds
+            selector.current_index = 0;
+        }
+    }
+
+    pub fn tag_selector_backspace(&mut self) {
+        if let Some(selector) = &mut self.tag_selector_state {
+            selector.search_query.pop();
+            selector.current_index = 0;
+        }
+    }
+
+    pub fn get_filtered_tags(&self) -> Vec<(usize, Tag)> {
+        if let Some(selector) = &self.tag_selector_state {
+            let query = selector.search_query.to_lowercase();
+            selector
+                .available_tags
+                .iter()
+                .enumerate()
+                .filter(|(_, tag)| tag.name.to_lowercase().contains(&query))
+                .map(|(i, tag)| (i, tag.clone()))
+                .collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -753,8 +772,17 @@ impl App {
     }
 
     pub fn tag_selector_next(&mut self) {
+        let filtered_len = self.get_filtered_tags().len();
         if let Some(selector) = &mut self.tag_selector_state {
-            if selector.current_index + 1 < selector.available_tags.len() {
+            // If we are at the end of the list, and there is a search query,
+            // allow going one step further to the "Create New" button (represented by len)
+            let limit = if !selector.search_query.is_empty() {
+                filtered_len
+            } else {
+                filtered_len.saturating_sub(1)
+            };
+
+            if selector.current_index < limit {
                 selector.current_index += 1;
             }
         }
@@ -764,6 +792,56 @@ impl App {
         if let Some(selector) = &mut self.tag_selector_state {
             if selector.current_index > 0 {
                 selector.current_index -= 1;
+            }
+        }
+    }
+
+    pub fn tag_selector_toggle_or_create(&mut self) {
+        let filtered = self.get_filtered_tags();
+
+        // Check if we are selecting the "Create New" option
+        if let Some(selector) = &mut self.tag_selector_state {
+            if !selector.search_query.is_empty() && selector.current_index == filtered.len() {
+                // CREATE NEW TAG
+                let new_name = selector.search_query.clone();
+                // Simple color cycling logic for new tags
+                let colors = ["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"];
+                let color_choice = colors[self.data.known_tags.len() % colors.len()];
+
+                let new_tag = Tag {
+                    name: new_name,
+                    color: color_choice.to_string(),
+                };
+
+                // Add to global data
+                self.data.known_tags.push(new_tag.clone());
+
+                // Add to selection
+                let new_idx = self.data.known_tags.len() - 1;
+                selector.selected_indices.push(new_idx);
+
+                // Reset search
+                selector.search_query.clear();
+                selector.available_tags = self.data.known_tags.clone();
+                selector.current_index = 0;
+                return;
+            }
+        }
+
+        // Normal Toggle Logic
+        if let Some((real_idx, _)) =
+            filtered.get(self.tag_selector_state.as_ref().unwrap().current_index)
+        {
+            if let Some(selector) = &mut self.tag_selector_state {
+                if let Some(pos) = selector
+                    .selected_indices
+                    .iter()
+                    .position(|&x| x == *real_idx)
+                {
+                    selector.selected_indices.remove(pos);
+                } else {
+                    selector.selected_indices.push(*real_idx);
+                }
             }
         }
     }

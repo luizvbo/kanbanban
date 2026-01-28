@@ -18,9 +18,9 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                         KeyCode::Char('K') => app.move_card_up(),
                         KeyCode::Char('H') => app.move_card_left(),
                         KeyCode::Char('L') => app.move_card_right(),
-                        KeyCode::Char('d') => app.trigger_delete(), // CHANGED
+                        KeyCode::Char('d') => app.trigger_delete(),
                         KeyCode::Char('a') | KeyCode::Char('n') => app.start_new_card(),
-                        KeyCode::Char('i') | KeyCode::Char('e') => app.start_edit_card(),
+                        KeyCode::Char('i') | KeyCode::Char('e') | KeyCode::Enter => app.start_edit_card(),
                         KeyCode::Char('?') => app.toggle_help(),
                         _ => {}
                     },
@@ -29,11 +29,20 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                         _ => {}
                     },
                     InputMode::TagSelection => match key.code {
-                        KeyCode::Esc => app.close_tag_selector(),
-                        KeyCode::Enter => app.tag_selector_confirm(),
-                        KeyCode::Char(' ') => app.tag_selector_toggle(),
-                        KeyCode::Char('j') | KeyCode::Down => app.tag_selector_next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.tag_selector_prev(),
+                        // FIX: Esc now Saves and Closes (Vim-style)
+                        KeyCode::Esc => app.tag_selector_confirm(),
+
+                        // Enter toggles selection or creates new tag
+                        KeyCode::Enter => app.tag_selector_toggle_or_create(),
+
+                        // Tab can also confirm, or just do nothing.
+                        // Let's keep it as confirm for flexibility.
+                        KeyCode::Tab => app.tag_selector_confirm(),
+
+                        KeyCode::Down => app.tag_selector_next(),
+                        KeyCode::Up => app.tag_selector_prev(),
+                        KeyCode::Backspace => app.tag_selector_backspace(),
+                        KeyCode::Char(c) => app.tag_selector_input_char(c),
                         _ => {}
                     },
                     InputMode::ExitingModal => match key.code {
