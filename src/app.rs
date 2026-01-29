@@ -1,4 +1,4 @@
-use crate::types::{Card, KanbanData, Project, Tag};
+use crate::types::{Card, Column, KanbanData, Project, Tag};
 use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -11,6 +11,10 @@ pub enum InputMode {
     Help,
     ExitingModal,
     DeleteConfirmation,
+    ProjectRename,
+    ColumnRename,
+    ColumnNew,
+    ColumnDelete,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -191,6 +195,7 @@ pub struct App {
     pub tag_selector_state: Option<TagSelectorState>,
     pub status_message: Option<String>,
     pub status_time: Option<Instant>,
+    pub prompt_input: String,
 }
 
 impl App {
@@ -209,6 +214,7 @@ impl App {
             tag_selector_state: None,
             status_message: None,
             status_time: None,
+            prompt_input: String::new(),
         })
     }
 
@@ -262,6 +268,127 @@ impl App {
             self.current_card_idx = 0;
         } else if self.current_card_idx >= col.cards.len() {
             self.current_card_idx = col.cards.len() - 1;
+        }
+    }
+
+    // 1. Rename Project
+    pub fn start_rename_project(&mut self) {
+        self.prompt_input = self.current_project().name.clone();
+        self.mode = InputMode::ProjectRename;
+    }
+
+    pub fn confirm_rename_project(&mut self) {
+        if !self.prompt_input.trim().is_empty() {
+            self.current_project_mut().name = self.prompt_input.clone();
+            self.save_with_feedback();
+        }
+        self.mode = InputMode::Normal;
+    }
+
+    // 2. Rename Column
+    pub fn start_rename_column(&mut self) {
+        if self.current_project().columns.is_empty() {
+            return;
+        }
+        self.prompt_input = self.current_project().columns[self.current_col_idx]
+            .title
+            .clone();
+        self.mode = InputMode::ColumnRename;
+    }
+
+    pub fn confirm_rename_column(&mut self) {
+        if !self.prompt_input.trim().is_empty() {
+            // FIX: Capture index to avoid E0503
+            let idx = self.current_col_idx;
+            self.current_project_mut().columns[idx].title = self.prompt_input.clone();
+            self.save_with_feedback();
+        }
+        self.mode = InputMode::Normal;
+    }
+
+    // 3. New Column
+    pub fn start_new_column(&mut self) {
+        self.prompt_input = String::new();
+        self.mode = InputMode::ColumnNew;
+    }
+
+    pub fn confirm_new_column(&mut self) {
+        if !self.prompt_input.trim().is_empty() {
+            let new_col = Column {
+                title: self.prompt_input.clone(),
+                cards: Vec::new(),
+                scroll_offset: 0, // Initialize scroll
+            };
+            self.current_project_mut().columns.push(new_col);
+            self.current_col_idx = self.current_project().columns.len() - 1;
+            self.current_card_idx = 0;
+            self.save_with_feedback();
+        }
+        self.mode = InputMode::Normal;
+    }
+
+    // 4. Delete Column
+    pub fn trigger_delete_column(&mut self) {
+        if self.current_project().columns.is_empty() {
+            return;
+        }
+        self.mode = InputMode::ColumnDelete;
+    }
+
+    pub fn confirm_delete_column(&mut self) {
+        // FIX: Capture index to avoid E0503
+        let idx = self.current_col_idx;
+        let project = self.current_project_mut();
+
+        if !project.columns.is_empty() {
+            project.columns.remove(idx);
+
+            if idx >= project.columns.len() {
+                if project.columns.is_empty() {
+                    self.current_col_idx = 0;
+                } else {
+                    self.current_col_idx = project.columns.len() - 1;
+                }
+            } else {
+                self.current_col_idx = idx;
+            }
+            self.current_card_idx = 0;
+            self.save_with_feedback();
+        }
+        self.mode = InputMode::Normal;
+    }
+
+    // --- Prompt Input Helpers ---
+    pub fn prompt_input_char(&mut self, c: char) {
+        self.prompt_input.push(c);
+    }
+
+    pub fn prompt_input_backspace(&mut self) {
+        self.prompt_input.pop();
+    }
+
+    pub fn cancel_prompt(&mut self) {
+        self.mode = InputMode::Normal;
+    }
+
+    // --- Column Reordering ---
+    pub fn move_column_left(&mut self) {
+        let idx = self.current_col_idx;
+        if idx > 0 {
+            let project = self.current_project_mut();
+            project.columns.swap(idx, idx - 1);
+            self.current_col_idx -= 1;
+            self.save_with_feedback();
+        }
+    }
+
+    pub fn move_column_right(&mut self) {
+        let idx = self.current_col_idx;
+        let project = self.current_project_mut();
+        if idx + 1 < project.columns.len() {
+            project.columns.swap(idx, idx + 1);
+            self.current_col_idx += 1;
+            self.save_with_feedback();
         }
     }
 
@@ -417,6 +544,15 @@ impl App {
     }
 
     // --- Editing Logic ---
+    pub fn is_edit_empty(&self) -> bool {
+        if let Some(state) = &self.edit_state {
+            return state.title.trim().is_empty()
+                && state.description.trim().is_empty()
+                && state.tags.is_empty();
+        }
+        true
+    }
+
     pub fn get_focused_field(&self) -> Option<EditField> {
         self.edit_state.as_ref().map(|s| s.focused_field)
     }
@@ -799,28 +935,23 @@ impl App {
     pub fn tag_selector_toggle_or_create(&mut self) {
         let filtered = self.get_filtered_tags();
 
-        // Check if we are selecting the "Create New" option
         if let Some(selector) = &mut self.tag_selector_state {
             if !selector.search_query.is_empty() && selector.current_index == filtered.len() {
-                // CREATE NEW TAG
+                // CREATE NEW TAG (Global)
                 let new_name = selector.search_query.clone();
-                // Simple color cycling logic for new tags
                 let colors = ["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"];
                 let color_choice = colors[self.data.known_tags.len() % colors.len()];
 
                 let new_tag = Tag {
                     name: new_name,
-                    color: color_choice.to_string(),
+                    color: Some(color_choice.to_string()), // Global has color
                 };
 
-                // Add to global data
                 self.data.known_tags.push(new_tag.clone());
 
-                // Add to selection
                 let new_idx = self.data.known_tags.len() - 1;
                 selector.selected_indices.push(new_idx);
 
-                // Reset search
                 selector.search_query.clear();
                 selector.available_tags = self.data.known_tags.clone();
                 selector.current_index = 0;
@@ -828,7 +959,7 @@ impl App {
             }
         }
 
-        // Normal Toggle Logic
+        // Toggle logic
         if let Some((real_idx, _)) =
             filtered.get(self.tag_selector_state.as_ref().unwrap().current_index)
         {
@@ -863,7 +994,11 @@ impl App {
                 edit_state.tags.clear();
                 for &idx in &selector.selected_indices {
                     if let Some(tag) = selector.available_tags.get(idx) {
-                        edit_state.tags.push(tag.clone());
+                        // FIX: Add tag to card with color=None to use global default
+                        edit_state.tags.push(Tag {
+                            name: tag.name.clone(),
+                            color: None,
+                        });
                     }
                 }
             }

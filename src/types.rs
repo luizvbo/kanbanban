@@ -8,20 +8,18 @@ use std::str::FromStr;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Tag {
     pub name: String,
-    pub color: String, // Changed from Enum to String for flexibility
+    pub color: Option<String>,
 }
 
 impl Tag {
-    pub fn get_color(&self) -> Color {
-        // 1. Try to parse as Hex (#RRGGBB)
-        if self.color.starts_with('#') {
-            if let Ok(c) = Color::from_str(&self.color) {
+    // Helper to parse string to Color
+    pub fn parse_color_string(s: &str) -> Color {
+        if s.starts_with('#') {
+            if let Ok(c) = Color::from_str(s) {
                 return c;
             }
         }
-
-        // 2. Match named colors (Case insensitive)
-        match self.color.to_lowercase().as_str() {
+        match s.to_lowercase().as_str() {
             "red" => Color::Red,
             "green" => Color::Green,
             "blue" => Color::Blue,
@@ -35,7 +33,7 @@ impl Tag {
             "lightgreen" => Color::LightGreen,
             "lightblue" => Color::LightBlue,
             "orange" => Color::Rgb(255, 165, 0),
-            _ => Color::White, // Default fallback
+            _ => Color::White,
         }
     }
 }
@@ -52,6 +50,8 @@ pub struct Card {
 pub struct Column {
     pub title: String,
     pub cards: Vec<Card>,
+    #[serde(skip)]
+    pub scroll_offset: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -63,7 +63,6 @@ pub struct Project {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KanbanData {
     pub projects: Vec<Project>,
-    // NEW: Store all known tags here so they persist in YAML
     #[serde(default)]
     pub known_tags: Vec<Tag>,
 }
@@ -74,15 +73,15 @@ impl KanbanData {
             known_tags: vec![
                 Tag {
                     name: "Bug".into(),
-                    color: "Red".into(),
+                    color: Some("Red".into()),
                 },
                 Tag {
                     name: "Feature".into(),
-                    color: "Green".into(),
+                    color: Some("Green".into()),
                 },
                 Tag {
                     name: "Urgent".into(),
-                    color: "Magenta".into(),
+                    color: Some("Magenta".into()),
                 },
             ],
             projects: vec![Project {
@@ -95,18 +94,21 @@ impl KanbanData {
                             description: "Press `?` for help.".into(),
                             tags: vec![Tag {
                                 name: "Bug".into(),
-                                color: "Red".into(),
+                                color: None, // Uses global color
                             }],
                             due_date: None,
                         }],
+                        scroll_offset: 0,
                     },
                     Column {
                         title: "In Progress".into(),
                         cards: vec![],
+                        scroll_offset: 0,
                     },
                     Column {
                         title: "Done".into(),
                         cards: vec![],
+                        scroll_offset: 0,
                     },
                 ],
             }],
@@ -121,7 +123,6 @@ impl KanbanData {
         if content.trim().is_empty() {
             return Ok(Self::default());
         }
-        // FIX: Added ::<KanbanData> type annotation
         match serde_yaml::from_str::<KanbanData>(&content) {
             Ok(mut data) => {
                 if data.known_tags.is_empty() {
@@ -137,5 +138,21 @@ impl KanbanData {
         let content = serde_yaml::to_string(self).context("Failed to serialize data")?;
         fs::write(path, content).context("Failed to write data file")?;
         Ok(())
+    }
+
+    // FIX: Logic to resolve color: Local -> Global -> Default
+    pub fn get_tag_color(&self, tag: &Tag) -> Color {
+        // 1. Check if card tag has specific color override
+        if let Some(c) = &tag.color {
+            return Tag::parse_color_string(c);
+        }
+        // 2. Check global known_tags
+        if let Some(global_tag) = self.known_tags.iter().find(|t| t.name == tag.name) {
+            if let Some(c) = &global_tag.color {
+                return Tag::parse_color_string(c);
+            }
+        }
+        // 3. Fallback
+        Color::White
     }
 }
