@@ -29,6 +29,26 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                         KeyCode::Char('r') => app.start_rename_column(),
                         KeyCode::Char('c') => app.start_new_column(),
                         KeyCode::Char('D') => app.trigger_delete_column(),
+
+                        KeyCode::Char('/') => app.start_filter(),
+                        KeyCode::Esc => app.clear_filter(), // Clear filter on Esc
+                        KeyCode::Char('v') => app.open_detail_view(),
+                        KeyCode::Char('o') => app.open_external_editor(),
+                        _ => {}
+                    },
+                    InputMode::Filter => match key.code {
+                        KeyCode::Enter | KeyCode::Esc => app.stop_filter(),
+                        KeyCode::Backspace => app.filter_input_backspace(),
+                        KeyCode::Char(c) => app.filter_input_char(c),
+                        _ => {}
+                    },
+                    InputMode::ViewCard => match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('v') => {
+                            app.close_detail_view()
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => app.view_scroll_down(),
+                        KeyCode::Char('k') | KeyCode::Up => app.view_scroll_up(),
+                        KeyCode::Char('o') => app.open_external_editor(), // Allow editing from view
                         _ => {}
                     },
                     InputMode::Help => match key.code {

@@ -42,6 +42,7 @@ impl Tag {
 pub struct Card {
     pub title: String,
     pub description: String,
+    pub category: Option<String>,
     pub tags: Vec<Tag>,
     pub due_date: Option<String>,
 }
@@ -72,16 +73,12 @@ impl KanbanData {
         Self {
             known_tags: vec![
                 Tag {
-                    name: "Bug".into(),
+                    name: "bug".into(),
                     color: Some("Red".into()),
                 },
                 Tag {
-                    name: "Feature".into(),
+                    name: "feature".into(),
                     color: Some("Green".into()),
-                },
-                Tag {
-                    name: "Urgent".into(),
-                    color: Some("Magenta".into()),
                 },
             ],
             projects: vec![Project {
@@ -91,10 +88,13 @@ impl KanbanData {
                         title: "To Do".into(),
                         cards: vec![Card {
                             title: "Welcome".into(),
-                            description: "Press `?` for help.".into(),
+                            description:
+                                "Press `v` to view details.\nPress `o` to open in external editor."
+                                    .into(),
+                            category: Some("General".into()), // Example
                             tags: vec![Tag {
                                 name: "Bug".into(),
-                                color: None, // Uses global color
+                                color: None,
                             }],
                             due_date: None,
                         }],

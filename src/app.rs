@@ -1,6 +1,7 @@
 use crate::types::{Card, Column, KanbanData, Project, Tag};
 use anyhow::Result;
 use std::path::PathBuf;
+use std::process::Command; // For external editor
 use std::time::Instant;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -15,11 +16,14 @@ pub enum InputMode {
     ColumnRename,
     ColumnNew,
     ColumnDelete,
+    ViewCard,
+    Filter,
 }
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum EditField {
     Title,
+    Category,
     Tags,
     DueDate,
     Description,
@@ -34,6 +38,7 @@ pub struct TagSelectorState {
 
 pub struct EditState {
     pub title: String,
+    pub category: String,
     pub tags: Vec<Tag>,
     pub due_date: String,
     pub description: String,
@@ -49,6 +54,7 @@ impl EditState {
     fn from_card(card: &Card) -> Self {
         Self {
             title: card.title.clone(),
+            category: card.category.clone().unwrap_or_default(), // NEW
             tags: card.tags.clone(),
             due_date: card.due_date.clone().unwrap_or_default(),
             description: card.description.clone(),
@@ -64,6 +70,7 @@ impl EditState {
     fn new() -> Self {
         Self {
             title: String::new(),
+            category: String::new(), // NEW
             tags: Vec::new(),
             due_date: String::new(),
             description: String::new(),
@@ -79,6 +86,7 @@ impl EditState {
     pub fn get_cursor_position_2d(&self, _width: u16) -> (u16, u16) {
         let text = match self.focused_field {
             EditField::Title => &self.title,
+            EditField::Category => &self.category,
             EditField::Tags => return (0, 0),
             EditField::DueDate => &self.due_date,
             EditField::Description => &self.description,
@@ -196,6 +204,8 @@ pub struct App {
     pub status_message: Option<String>,
     pub status_time: Option<Instant>,
     pub prompt_input: String,
+    pub filter_query: String,
+    pub view_scroll_y: u16,
 }
 
 impl App {
@@ -215,7 +225,135 @@ impl App {
             status_message: None,
             status_time: None,
             prompt_input: String::new(),
+            filter_query: String::new(), // Init
+            view_scroll_y: 0,            // Init
         })
+    }
+
+    // --- Filter Logic ---
+    pub fn start_filter(&mut self) {
+        self.mode = InputMode::Filter;
+    }
+
+    pub fn stop_filter(&mut self) {
+        self.mode = InputMode::Normal;
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter_query.clear();
+        self.mode = InputMode::Normal;
+    }
+
+    pub fn filter_input_char(&mut self, c: char) {
+        self.filter_query.push(c);
+    }
+
+    pub fn filter_input_backspace(&mut self) {
+        self.filter_query.pop();
+    }
+
+    // Helper to check if a card matches the filter
+    pub fn card_matches_filter(&self, card: &Card) -> bool {
+        if self.filter_query.is_empty() {
+            return true;
+        }
+        let q = self.filter_query.to_lowercase();
+
+        // Match Title
+        if card.title.to_lowercase().contains(&q) {
+            return true;
+        }
+        // Match Category
+        if let Some(cat) = &card.category {
+            if cat.to_lowercase().contains(&q) {
+                return true;
+            }
+        }
+        // Match Tags
+        if card.tags.iter().any(|t| t.name.to_lowercase().contains(&q)) {
+            return true;
+        }
+
+        false
+    }
+
+    // --- Detail View Logic ---
+    pub fn open_detail_view(&mut self) {
+        let col = &self.current_project().columns[self.current_col_idx];
+        if !col.cards.is_empty() {
+            self.view_scroll_y = 0;
+            self.mode = InputMode::ViewCard;
+        }
+    }
+
+    pub fn close_detail_view(&mut self) {
+        self.mode = InputMode::Normal;
+    }
+
+    pub fn view_scroll_down(&mut self) {
+        self.view_scroll_y += 1;
+    }
+
+    pub fn view_scroll_up(&mut self) {
+        if self.view_scroll_y > 0 {
+            self.view_scroll_y -= 1;
+        }
+    }
+
+    // --- External Editor Logic ---
+    pub fn open_external_editor(&mut self) {
+        // Only allow if in Normal mode or View mode
+        if self.mode != InputMode::Normal && self.mode != InputMode::ViewCard {
+            return;
+        }
+
+        let col = &self.current_project().columns[self.current_col_idx];
+        if col.cards.is_empty() {
+            return;
+        }
+        let card = &col.cards[self.current_card_idx];
+
+        // 1. Create temp file
+        use std::io::Write;
+        let mut temp_file = std::env::temp_dir();
+        temp_file.push("kanbanban_edit.md");
+
+        if let Ok(mut file) = std::fs::File::create(&temp_file) {
+            let _ = file.write_all(card.description.as_bytes());
+        } else {
+            self.status_message = Some("Failed to create temp file".into());
+            self.status_time = Some(Instant::now());
+            return;
+        }
+
+        // 2. Open Editor
+        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+
+        // We need to suspend raw mode to let the editor take over
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+
+        let status = Command::new(&editor).arg(&temp_file).status();
+
+        // Restore raw mode
+        let _ = crossterm::terminal::enable_raw_mode();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+
+        // 3. Read back
+        if status.map(|s| s.success()).unwrap_or(false) {
+            if let Ok(content) = std::fs::read_to_string(&temp_file) {
+                let idx = self.current_card_idx;
+                let col_idx = self.current_col_idx;
+                self.current_project_mut().columns[col_idx].cards[idx].description = content;
+                self.save_with_feedback();
+            }
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_file(temp_file);
+
+        // Force redraw
+        // (Handled by main loop)
     }
 
     pub fn current_project(&self) -> &Project {
@@ -587,6 +725,11 @@ impl App {
                 } else {
                     state.title.clone()
                 },
+                category: if state.category.is_empty() {
+                    None
+                } else {
+                    Some(state.category.clone())
+                },
                 description: state.description.clone(),
                 tags: state.tags,
                 due_date: if state.due_date.is_empty() {
@@ -638,6 +781,7 @@ impl App {
 
             let text = match state.focused_field {
                 EditField::Title => &mut state.title,
+                EditField::Category => &mut state.category, // NEW
                 EditField::Tags => return,
                 EditField::DueDate => &mut state.due_date,
                 EditField::Description => &mut state.description,
@@ -686,6 +830,7 @@ impl App {
 
             let text = match state.focused_field {
                 EditField::Title => &mut state.title,
+                EditField::Category => &mut state.category, // FIX
                 EditField::Tags => return,
                 EditField::DueDate => &mut state.due_date,
                 EditField::Description => &mut state.description,
@@ -723,6 +868,7 @@ impl App {
             if state.cursor_position > 0 {
                 let text = match state.focused_field {
                     EditField::Title => &state.title,
+                    EditField::Category => &state.category, // FIX
                     EditField::Tags => "",
                     EditField::DueDate => &state.due_date,
                     EditField::Description => &state.description,
@@ -746,6 +892,7 @@ impl App {
         if let Some(state) = &mut self.edit_state {
             let text = match state.focused_field {
                 EditField::Title => &state.title,
+                EditField::Category => &state.category, // FIX
                 EditField::Tags => "",
                 EditField::DueDate => &state.due_date,
                 EditField::Description => &state.description,
@@ -795,6 +942,7 @@ impl App {
         if let Some(state) = &mut self.edit_state {
             let text = match state.focused_field {
                 EditField::Title => &state.title,
+                EditField::Category => &state.category, // FIX
                 EditField::Tags => "",
                 EditField::DueDate => &state.due_date,
                 EditField::Description => &state.description,
@@ -819,16 +967,19 @@ impl App {
                 return;
             }
 
+            // Updated Cycle Order
             state.focused_field = if reverse {
                 match state.focused_field {
                     EditField::Title => EditField::Description,
-                    EditField::Tags => EditField::Title,
+                    EditField::Category => EditField::Title, // FIX
+                    EditField::Tags => EditField::Category,  // FIX
                     EditField::DueDate => EditField::Tags,
                     EditField::Description => EditField::DueDate,
                 }
             } else {
                 match state.focused_field {
-                    EditField::Title => EditField::Tags,
+                    EditField::Title => EditField::Category, // FIX
+                    EditField::Category => EditField::Tags,  // FIX
                     EditField::Tags => EditField::DueDate,
                     EditField::DueDate => EditField::Description,
                     EditField::Description => EditField::Title,
@@ -837,6 +988,7 @@ impl App {
 
             let text_len = match state.focused_field {
                 EditField::Title => state.title.len(),
+                EditField::Category => state.category.len(), // FIX
                 EditField::Tags => 0,
                 EditField::DueDate => state.due_date.len(),
                 EditField::Description => state.description.len(),

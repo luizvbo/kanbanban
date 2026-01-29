@@ -1,6 +1,5 @@
 use crate::app::{App, EditField, InputMode};
 use crate::types::{Card, KanbanData};
-use chrono::{Local, NaiveDate};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use ratatui::{
     Frame,
@@ -39,6 +38,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_board(f, app, chunks[1]);
     draw_footer(f, app, chunks[2]);
+    // Draw Filter Bar if active or if query exists
+    if app.mode == InputMode::Filter || !app.filter_query.is_empty() {
+        draw_filter_bar(f, app);
+    }
 
     match app.mode {
         InputMode::Help => draw_help_popup(f),
@@ -56,8 +59,123 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         InputMode::ColumnRename => draw_input_modal(f, " Rename Column ", &app.prompt_input),
         InputMode::ColumnNew => draw_input_modal(f, " New Column Title ", &app.prompt_input),
         InputMode::ColumnDelete => draw_column_delete_modal(f, app),
+        InputMode::ViewCard => draw_detail_view(f, app), // NEW
         _ => {}
     }
+}
+
+fn draw_filter_bar(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let filter_area = Rect {
+        x: area.x,
+        y: area.height - 4, // Just above footer
+        width: area.width,
+        height: 1,
+    };
+
+    let prefix = if app.mode == InputMode::Filter {
+        "FILTER: "
+    } else {
+        "FILTER (Active): "
+    };
+    let style = if app.mode == InputMode::Filter {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::Green)
+    };
+
+    let text = Line::from(vec![
+        Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
+        Span::raw(&app.filter_query),
+    ]);
+
+    f.render_widget(Clear, filter_area); // Clear background
+    f.render_widget(
+        Paragraph::new(text).style(Style::default().bg(Color::Black)),
+        filter_area,
+    );
+}
+
+// NEW: Detail View Modal
+fn draw_detail_view(f: &mut Frame, app: &App) {
+    let area = centered_rect(80, 80, f.area());
+    f.render_widget(Clear, area);
+
+    let col = &app.current_project().columns[app.current_col_idx];
+    if col.cards.is_empty() {
+        return;
+    }
+    let card = &col.cards[app.current_card_idx];
+
+    let block = Block::default()
+        .title(format!(" {} ", card.title))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Thick)
+        .style(Style::default().bg(Color::DarkGray));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Meta (Category | Date)
+            Constraint::Length(1), // Tags
+            Constraint::Length(1), // Separator
+            Constraint::Min(1),    // Description
+            Constraint::Length(1), // Footer hint
+        ])
+        .split(inner);
+
+    // 1. Meta Row
+    let mut meta_spans = Vec::new();
+    if let Some(cat) = &card.category {
+        meta_spans.push(Span::styled(
+            format!("PROJECT: {} ", cat),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        meta_spans.push(Span::raw(" | "));
+    }
+    if let Some(date) = &card.due_date {
+        meta_spans.push(Span::styled(
+            format!("DUE: {} ", date),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(meta_spans)), chunks[0]);
+
+    // 2. Tags
+    let mut tag_spans = Vec::new();
+    for tag in &card.tags {
+        let color = app.data.get_tag_color(tag);
+        tag_spans.push(Span::styled(
+            format!(" #{} ", tag.name),
+            Style::default().bg(color).fg(Color::Black),
+        ));
+        tag_spans.push(Span::raw(" "));
+    }
+    f.render_widget(Line::from(tag_spans), chunks[1]);
+
+    // 3. Separator
+    f.render_widget(Block::default().borders(Borders::BOTTOM), chunks[2]);
+
+    // 4. Description (Scrollable)
+    let markdown = parse_markdown(&card.description);
+    f.render_widget(
+        Paragraph::new(markdown)
+            .wrap(Wrap { trim: false }) // Soft wrap for reading!
+            .scroll((app.view_scroll_y, 0)),
+        chunks[3],
+    );
+
+    // 5. Footer
+    f.render_widget(
+        Paragraph::new("j/k: Scroll | o: Open External | Esc: Close")
+            .style(Style::default().fg(Color::Gray)),
+        chunks[4],
+    );
 }
 
 fn draw_input_modal(f: &mut Frame, title: &str, input: &str) {
@@ -179,13 +297,16 @@ fn draw_delete_confirmation(f: &mut Frame) {
 }
 
 fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
-    // 1. Get basic info first to avoid holding a borrow of 'app' too long
     let project_idx = app.current_project_idx;
     let n_columns = app.data.projects[project_idx].columns.len();
 
     if n_columns == 0 {
         return;
     }
+
+    // FIX 1: Extract filter query here to avoid borrowing `app` inside the mutable loop
+    let filter_query = app.filter_query.to_lowercase();
+    let has_filter = !filter_query.is_empty();
 
     let constraints: Vec<Constraint> = (0..n_columns)
         .map(|_| Constraint::Percentage(100 / n_columns as u16))
@@ -200,11 +321,31 @@ fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
         let selected_card_idx = app.current_card_idx;
 
         // --- SCOPE 1: MUTABLE CALCULATION ---
-        // We open a block so the mutable borrow 'col' is dropped as soon as the block ends.
         {
             let col = &mut app.data.projects[project_idx].columns[i];
 
-            if is_col_focused && !col.cards.is_empty() {
+            // FIX 2: Inline the filter logic using the local `filter_query` string
+            // This avoids the "second borrow of app" error.
+            let visible_indices: Vec<usize> = col
+                .cards
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    if !has_filter {
+                        return true;
+                    }
+                    c.title.to_lowercase().contains(&filter_query)
+                        || c.category
+                            .as_ref()
+                            .map_or(false, |cat| cat.to_lowercase().contains(&filter_query))
+                        || c.tags
+                            .iter()
+                            .any(|t| t.name.to_lowercase().contains(&filter_query))
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+
+            if is_col_focused && !visible_indices.is_empty() {
                 // Ensure scroll_offset is not beyond current selection
                 if col.scroll_offset > selected_card_idx {
                     col.scroll_offset = selected_card_idx;
@@ -245,10 +386,9 @@ fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                 }
             }
-        } // <--- Mutable borrow of 'app.data' ends here!
+        }
 
         // --- SCOPE 2: IMMUTABLE RENDERING ---
-        // Now we can safely borrow app.data immutably.
         let col = &app.data.projects[project_idx].columns[i];
 
         let border_style = if is_col_focused {
@@ -277,7 +417,25 @@ fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let mut y_offset = inner_area.y;
+
         for (j, card) in col.cards.iter().enumerate().skip(col.scroll_offset) {
+            // FIX 3: Use the same local filter logic here
+            if has_filter {
+                let matches = card.title.to_lowercase().contains(&filter_query)
+                    || card
+                        .category
+                        .as_ref()
+                        .map_or(false, |cat| cat.to_lowercase().contains(&filter_query))
+                    || card
+                        .tags
+                        .iter()
+                        .any(|t| t.name.to_lowercase().contains(&filter_query));
+
+                if !matches {
+                    continue;
+                }
+            }
+
             let card_height = get_card_height(card);
 
             if y_offset + card_height > inner_area.bottom() {
@@ -293,7 +451,6 @@ fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
 
             let is_selected = is_col_focused && selected_card_idx == j;
 
-            // This now works because 'col' and '&app.data' are both immutable borrows.
             draw_card(f, card, card_area, is_selected, &app.data);
             y_offset += card_height;
         }
@@ -337,7 +494,8 @@ fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data: &K
         .borders(Borders::ALL)
         .border_type(border_type)
         .border_style(border_style);
-    let inner = block.inner(area);
+
+    let inner = block.inner(area); // FIX: Call inner before moving block
     f.render_widget(block, area);
 
     // Layout
@@ -353,18 +511,28 @@ fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data: &K
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
-        .split(inner);
+        .split(inner); // Use pre-calculated inner
 
     let mut chunk_idx = 0;
 
-    // 1. Title
-    f.render_widget(
-        Paragraph::new(Span::styled(
-            &card.title,
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        chunks[chunk_idx],
-    );
+    // 1. Title + Category
+    let mut title_spans = Vec::new();
+    if let Some(cat) = &card.category {
+        title_spans.push(Span::styled(
+            format!(" {} ", cat),
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ));
+        title_spans.push(Span::raw(" "));
+    }
+    title_spans.push(Span::styled(
+        &card.title,
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+
+    f.render_widget(Paragraph::new(Line::from(title_spans)), chunks[chunk_idx]);
     chunk_idx += 1;
 
     // 2. Tags
@@ -414,6 +582,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         InputMode::ColumnRename => " RENAME COL ",
         InputMode::ColumnNew => " NEW COL ",
         InputMode::ColumnDelete => " DELETE COL ",
+        InputMode::ViewCard => " VIEW ",
+        InputMode::Filter => " FILTER ",
     };
     let mode_color = match app.mode {
         InputMode::Normal => Color::Blue,
@@ -426,10 +596,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         InputMode::ColumnRename => Color::Cyan,
         InputMode::ColumnNew => Color::Green,
         InputMode::ColumnDelete => Color::Red,
+        InputMode::ViewCard => Color::LightBlue,
+        InputMode::Filter => Color::Yellow,
     };
-    let mut status_text =
-        " [q] Quit | [?] Help | [h/j/k/l] Navigate | [J/K] Move Up/Down | [a] Add | [i] Edit "
-            .to_string();
+    let mut status_text = " [q] Quit | [?] Help ".to_string(); // Simplified
     if let Some(msg) = &app.status_message {
         if let Some(time) = app.status_time {
             if time.elapsed().as_secs() < 3 {
@@ -618,23 +788,16 @@ fn draw_edit_popup(f: &mut Frame, app: &mut App) {
         let area = centered_rect(70, 80, f.area());
         f.render_widget(Clear, area);
 
-        let block = Block::default()
-            .title(if state.is_new_card {
-                " New Card "
-            } else {
-                " Edit Card "
-            })
-            .borders(Borders::ALL)
-            .border_type(BorderType::Thick)
-            .style(Style::default().bg(Color::DarkGray));
-
-        f.render_widget(block.clone(), area);
-
+        let block = Block::default().borders(Borders::ALL).title(" Edit ");
+        // FIX: Calculate inner ONCE before moving block
         let inner = block.inner(area);
+        f.render_widget(block, area);
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // Title
+                Constraint::Length(3), // Category (NEW)
                 Constraint::Length(3), // Tags
                 Constraint::Length(3), // Due Date
                 Constraint::Min(5),    // Description
@@ -648,47 +811,36 @@ fn draw_edit_popup(f: &mut Frame, app: &mut App) {
             &state.title,
             state.focused_field == EditField::Title,
         );
-        let title_scroll = if state.focused_field == EditField::Title {
-            if state.cursor_position as u16 >= chunks[0].width.saturating_sub(2) {
-                state.cursor_position as u16 - (chunks[0].width.saturating_sub(3))
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-        f.render_widget(title_widget.scroll((0, title_scroll)), chunks[0]);
+        f.render_widget(title_widget, chunks[0]);
 
-        // 2. Tags
+        // 2. Category
+        let cat_widget = create_input_block(
+            "Category",
+            &state.category,
+            state.focused_field == EditField::Category,
+        );
+        f.render_widget(cat_widget, chunks[1]);
+
+        // 3. Tags
         let tags_str = state
             .tags
             .iter()
             .map(|t| format!("#{}", t.name))
             .collect::<Vec<_>>()
             .join(" ");
-        let tags_title = if state.focused_field == EditField::Tags {
-            "Tags (Press Enter to Select)"
-        } else {
-            "Tags"
-        };
-        f.render_widget(
-            create_input_block(
-                tags_title,
-                &tags_str,
-                state.focused_field == EditField::Tags,
-            ),
-            chunks[1],
-        );
+        let tags_widget =
+            create_input_block("Tags", &tags_str, state.focused_field == EditField::Tags);
+        f.render_widget(tags_widget, chunks[2]);
 
-        // 3. Due Date
+        // 4. Due Date
         let date_widget = create_input_block(
-            "Due Date (YYYY-MM-DD)",
+            "Due Date",
             &state.due_date,
             state.focused_field == EditField::DueDate,
         );
-        f.render_widget(date_widget, chunks[2]);
+        f.render_widget(date_widget, chunks[3]);
 
-        // 4. Description
+        // 5. Description
         let (cursor_col, cursor_row) =
             state.get_cursor_position_2d(chunks[3].width.saturating_sub(2));
 
@@ -708,7 +860,6 @@ fn draw_edit_popup(f: &mut Frame, app: &mut App) {
             state.scroll_x = cursor_col;
         }
 
-        // FIX: Use Text::from() instead of Span::raw() to correctly render newlines
         let desc_content = if state.description.is_empty() && !state.description_edit_mode {
             Text::from(Span::styled(
                 "No description provided...",
@@ -747,7 +898,7 @@ fn draw_edit_popup(f: &mut Frame, app: &mut App) {
 
         f.render_widget(desc_widget, chunks[3]);
 
-        // 5. Footer
+        // 6. Footer
         let footer_text =
             if state.focused_field == EditField::Description && state.description_edit_mode {
                 "ESC: Stop Editing | TAB: Indent | ENTER: Newline"
@@ -758,29 +909,27 @@ fn draw_edit_popup(f: &mut Frame, app: &mut App) {
 
         // Render Cursor
         if app.mode == InputMode::Editing {
-            let show_cursor = if state.focused_field == EditField::Description {
-                state.description_edit_mode
-            } else {
-                state.focused_field != EditField::Tags
-            };
-
+            let show_cursor = state.focused_field != EditField::Tags; // Tags handled by modal
             if show_cursor {
                 let (x, y) = match state.focused_field {
                     EditField::Title => (
-                        chunks[0].x
-                            + 1
-                            + (state.cursor_position as u16).saturating_sub(title_scroll),
+                        chunks[0].x + 1 + state.cursor_position as u16,
                         chunks[0].y + 1,
+                    ),
+                    EditField::Category => (
+                        chunks[1].x + 1 + state.cursor_position as u16,
+                        chunks[1].y + 1,
                     ),
                     EditField::Tags => (0, 0),
                     EditField::DueDate => (
-                        chunks[2].x + 1 + state.cursor_position as u16,
-                        chunks[2].y + 1,
+                        chunks[3].x + 1 + state.cursor_position as u16,
+                        chunks[3].y + 1,
                     ),
-                    EditField::Description => (
-                        chunks[3].x + 1 + (cursor_col.saturating_sub(state.scroll_x)),
-                        chunks[3].y + 1 + (cursor_row.saturating_sub(state.scroll_y)),
-                    ),
+                    EditField::Description => {
+                        let (col, row) =
+                            state.get_cursor_position_2d(chunks[4].width.saturating_sub(2));
+                        (chunks[4].x + 1 + col, chunks[4].y + 1 + row)
+                    }
                 };
                 f.set_cursor_position((x, y));
             }
