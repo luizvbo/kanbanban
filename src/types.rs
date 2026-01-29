@@ -156,3 +156,57 @@ impl KanbanData {
         Color::White
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+
+    #[test]
+    fn test_color_parsing() {
+        assert_eq!(Tag::parse_color_string("Red"), Color::Red);
+        assert_eq!(Tag::parse_color_string("red"), Color::Red);
+        assert_eq!(Tag::parse_color_string("#ff0000"), Color::Rgb(255, 0, 0));
+        assert_eq!(Tag::parse_color_string("unknown_color"), Color::White); // Fallback
+    }
+
+    #[test]
+    fn test_tag_color_resolution() {
+        let mut data = KanbanData::default();
+
+        // 1. Setup Global Tag
+        data.known_tags.push(Tag {
+            name: "GlobalTag".into(),
+            color: Some("Blue".into()),
+        });
+
+        // Case A: Tag has specific color (override)
+        let local_tag = Tag {
+            name: "GlobalTag".into(),
+            color: Some("Red".into()),
+        };
+        assert_eq!(data.get_tag_color(&local_tag), Color::Red);
+
+        // Case B: Tag has no color, should use Global
+        let local_tag_inherit = Tag {
+            name: "GlobalTag".into(),
+            color: None,
+        };
+        assert_eq!(data.get_tag_color(&local_tag_inherit), Color::Blue);
+
+        // Case C: Tag unknown, fallback to White
+        let unknown_tag = Tag {
+            name: "Mystery".into(),
+            color: None,
+        };
+        assert_eq!(data.get_tag_color(&unknown_tag), Color::White);
+    }
+
+    #[test]
+    fn test_default_data_integrity() {
+        let data = KanbanData::default();
+        assert!(!data.projects.is_empty());
+        assert!(!data.projects[0].columns.is_empty());
+        assert!(!data.known_tags.is_empty());
+    }
+}

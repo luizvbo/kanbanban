@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::Command; // For external editor
 use std::time::Instant;
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum InputMode {
     Normal,
     Editing,
@@ -20,7 +20,7 @@ pub enum InputMode {
     Filter,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 pub enum EditField {
     Title,
     Category,
@@ -1156,5 +1156,515 @@ impl App {
             }
         }
         self.close_tag_selector();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Column;
+
+    // Helper to create a test app in memory
+    fn create_test_app() -> App {
+        let mut app = App::new(PathBuf::from("dummy.yaml")).unwrap();
+        // Clear default data for clean testing
+        app.data.projects[0].columns.clear();
+        app.data.projects[0].columns.push(Column {
+            title: "Col 1".into(),
+            cards: vec![],
+            scroll_offset: 0,
+        });
+        app.data.projects[0].columns.push(Column {
+            title: "Col 2".into(),
+            cards: vec![],
+            scroll_offset: 0,
+        });
+        app
+    }
+
+    #[test]
+    fn test_navigation_clamping() {
+        let mut app = create_test_app();
+        // Add 2 cards to Col 1
+        app.data.projects[0].columns[0].cards.push(Card {
+            title: "A".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        });
+        app.data.projects[0].columns[0].cards.push(Card {
+            title: "B".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        });
+
+        // Test Card Navigation
+        assert_eq!(app.current_card_idx, 0);
+        app.next_card();
+        assert_eq!(app.current_card_idx, 1);
+        app.next_card();
+        assert_eq!(app.current_card_idx, 1); // Should clamp at end
+
+        // Test Column Navigation
+        assert_eq!(app.current_col_idx, 0);
+        app.next_column();
+        assert_eq!(app.current_col_idx, 1);
+
+        // When switching to empty column, card idx should be 0
+        assert_eq!(app.current_card_idx, 0);
+    }
+
+    #[test]
+    fn test_move_card_right() {
+        let mut app = create_test_app();
+        let card = Card {
+            title: "MoveMe".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        };
+        app.data.projects[0].columns[0].cards.push(card);
+
+        assert_eq!(app.data.projects[0].columns[0].cards.len(), 1);
+        assert_eq!(app.data.projects[0].columns[1].cards.len(), 0);
+
+        app.move_card_right();
+
+        assert_eq!(app.data.projects[0].columns[0].cards.len(), 0);
+        assert_eq!(app.data.projects[0].columns[1].cards.len(), 1);
+        assert_eq!(app.data.projects[0].columns[1].cards[0].title, "MoveMe");
+    }
+
+    #[test]
+    fn test_move_column() {
+        let mut app = create_test_app();
+        // Col 1 is index 0, Col 2 is index 1
+
+        app.current_col_idx = 0;
+        app.move_column_right();
+
+        // "Col 2" should now be at index 0
+        assert_eq!(app.data.projects[0].columns[0].title, "Col 2");
+        assert_eq!(app.data.projects[0].columns[1].title, "Col 1");
+        // Focus should follow the moved column (now at index 1)
+        assert_eq!(app.current_col_idx, 1);
+    }
+
+    #[test]
+    fn test_filtering() {
+        let mut app = create_test_app();
+        let card1 = Card {
+            title: "Fix Bug".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        };
+        let card2 = Card {
+            title: "New Feature".into(),
+            description: "".into(),
+            category: Some("Backend".into()),
+            tags: vec![],
+            due_date: None,
+        };
+
+        // Test Title Match
+        app.filter_query = "bug".into();
+        assert!(app.card_matches_filter(&card1));
+        assert!(!app.card_matches_filter(&card2));
+
+        // Test Category Match
+        app.filter_query = "back".into();
+        assert!(!app.card_matches_filter(&card1));
+        assert!(app.card_matches_filter(&card2));
+    }
+
+    #[test]
+    fn test_delete_column_logic() {
+        let mut app = create_test_app();
+        assert_eq!(app.data.projects[0].columns.len(), 2);
+
+        app.current_col_idx = 0;
+        app.confirm_delete_column(); // Logic extracted from UI event handler
+
+        assert_eq!(app.data.projects[0].columns.len(), 1);
+        assert_eq!(app.data.projects[0].columns[0].title, "Col 2");
+    }
+
+    #[test]
+    fn test_edit_state_cursor_movement() {
+        let mut state = EditState::new();
+        state.focused_field = EditField::Description;
+        state.description = "Line 1\nLine 2".into();
+
+        // Start at 0
+        assert_eq!(state.cursor_position, 0);
+
+        // Move Down
+        state.move_cursor_down();
+        // Should be at start of Line 2 (Length of "Line 1" + "\n" = 7)
+        assert_eq!(state.cursor_position, 7);
+
+        // Move Up
+        state.move_cursor_up();
+        assert_eq!(state.cursor_position, 0);
+    }
+
+    #[test]
+    fn test_text_editing_logic() {
+        let mut app = create_test_app();
+        app.start_new_card();
+
+        // 1. Typing Title
+        app.edit_input_char('H');
+        app.edit_input_char('i');
+        assert_eq!(app.edit_state.as_ref().unwrap().title, "Hi");
+
+        // 2. Backspace
+        app.edit_input_backspace();
+        assert_eq!(app.edit_state.as_ref().unwrap().title, "H");
+
+        // 3. Cycle Fields
+        app.cycle_edit_field(false); // To Category
+        assert_eq!(
+            app.edit_state.as_ref().unwrap().focused_field,
+            EditField::Category
+        );
+
+        app.cycle_edit_field(false); // To Tags
+        app.cycle_edit_field(false); // To DueDate
+        app.cycle_edit_field(false); // To Description
+        assert_eq!(
+            app.edit_state.as_ref().unwrap().focused_field,
+            EditField::Description
+        );
+
+        // 4. Description Editing
+        app.toggle_description_edit(); // Enter edit mode
+        app.edit_input_char('A');
+        app.edit_input_char('\n');
+        app.edit_input_char('B');
+        assert_eq!(app.edit_state.as_ref().unwrap().description, "A\nB");
+
+        // 5. Cursor Movement in Description
+        app.move_cursor_up();
+        // Should be at 'A' (index 0) or end of line 1 depending on implementation details,
+        // but definitely not index 3 ('B')
+        assert!(app.edit_state.as_ref().unwrap().cursor_position < 3);
+    }
+
+    #[test]
+    fn test_column_operations() {
+        let mut app = create_test_app();
+
+        // New Column
+        app.start_new_column();
+        assert_eq!(app.mode, InputMode::ColumnNew);
+        app.prompt_input = "New Col".into();
+        app.confirm_new_column();
+        assert_eq!(app.data.projects[0].columns.len(), 3);
+        assert_eq!(app.data.projects[0].columns[2].title, "New Col");
+
+        // Rename Column
+        app.current_col_idx = 2;
+        app.start_rename_column();
+        assert_eq!(app.prompt_input, "New Col");
+        app.prompt_input = "Renamed".into();
+        app.confirm_rename_column();
+        assert_eq!(app.data.projects[0].columns[2].title, "Renamed");
+    }
+
+    #[test]
+    fn test_tag_selector_logic() {
+        let mut app = create_test_app();
+        app.start_new_card();
+        app.open_tag_selector();
+
+        assert!(app.tag_selector_state.is_some());
+
+        // Filter
+        app.tag_selector_input_char('b');
+        app.tag_selector_input_char('u');
+        let filtered = app.get_filtered_tags();
+        assert!(
+            filtered
+                .iter()
+                .any(|(_, t)| t.name.to_lowercase().contains("bug"))
+        );
+
+        // Create New Tag logic
+        app.tag_selector_state.as_mut().unwrap().search_query = "NewTag".into();
+        app.tag_selector_state.as_mut().unwrap().current_index = app.get_filtered_tags().len(); // Select "Create New"
+        app.tag_selector_toggle_or_create();
+
+        assert!(app.data.known_tags.iter().any(|t| t.name == "NewTag"));
+    }
+
+    #[test]
+    fn test_card_movement_vertical_boundaries() {
+        let mut app = create_test_app();
+        // Add 3 cards
+        let col = &mut app.data.projects[0].columns[0];
+        col.cards.push(Card {
+            title: "1".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        });
+        col.cards.push(Card {
+            title: "2".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        });
+        col.cards.push(Card {
+            title: "3".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        });
+
+        // Select middle
+        app.current_card_idx = 1;
+
+        // Move Up
+        app.move_card_up();
+        assert_eq!(app.current_card_idx, 0);
+        assert_eq!(app.data.projects[0].columns[0].cards[0].title, "2");
+
+        // Move Up again (Boundary check - should do nothing)
+        app.move_card_up();
+        assert_eq!(app.current_card_idx, 0);
+        assert_eq!(app.data.projects[0].columns[0].cards[0].title, "2");
+
+        // Move Down to bottom
+        app.move_card_down(); // idx 1
+        app.move_card_down(); // idx 2
+        assert_eq!(app.current_card_idx, 2);
+
+        // Move Down again (Boundary check)
+        app.move_card_down();
+        assert_eq!(app.current_card_idx, 2);
+    }
+
+    #[test]
+    fn test_card_movement_horizontal_boundaries() {
+        let mut app = create_test_app();
+
+        // FIX: Add a card to Col 0 so we have something to move.
+        // create_test_app initializes columns as empty.
+        app.data.projects[0].columns[0].cards.push(Card {
+            title: "MoveMe".into(),
+            description: "".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        });
+
+        // Try moving left from Col 0 (Boundary)
+        app.current_col_idx = 0;
+        app.move_card_left();
+        assert_eq!(app.current_col_idx, 0); // Should stay
+
+        // Move right to Col 1
+        app.move_card_right();
+        assert_eq!(app.current_col_idx, 1);
+
+        // Try moving right from Col 1 (Boundary - assuming only 2 cols)
+        app.move_card_right();
+        assert_eq!(app.current_col_idx, 1); // Should stay
+    }
+
+    #[test]
+    fn test_cycle_edit_field_reverse() {
+        let mut app = create_test_app();
+        app.start_new_card();
+
+        // Default is Title
+        assert_eq!(
+            app.edit_state.as_ref().unwrap().focused_field,
+            EditField::Title
+        );
+
+        // Reverse Cycle
+        app.cycle_edit_field(true); // To Description
+        assert_eq!(
+            app.edit_state.as_ref().unwrap().focused_field,
+            EditField::Description
+        );
+
+        app.cycle_edit_field(true); // To DueDate
+        assert_eq!(
+            app.edit_state.as_ref().unwrap().focused_field,
+            EditField::DueDate
+        );
+    }
+
+    #[test]
+    fn test_view_scrolling() {
+        let mut app = create_test_app();
+        app.open_detail_view();
+
+        assert_eq!(app.view_scroll_y, 0);
+
+        app.view_scroll_down();
+        assert_eq!(app.view_scroll_y, 1);
+
+        app.view_scroll_up();
+        assert_eq!(app.view_scroll_y, 0);
+
+        app.view_scroll_up(); // Boundary
+        assert_eq!(app.view_scroll_y, 0);
+    }
+
+    #[test]
+    fn test_delete_empty_column_guard() {
+        let mut app = create_test_app();
+        // Clear all columns
+        app.data.projects[0].columns.clear();
+
+        // Trigger delete on empty project
+        app.trigger_delete_column();
+        assert_eq!(app.mode, InputMode::Normal); // Should not enter delete mode
+    }
+
+    #[test]
+    fn test_cursor_movement_all_fields() {
+        let mut app = create_test_app();
+        app.start_new_card();
+        
+        // Helper to test a specific field
+        fn test_field(app: &mut App, field: EditField) {
+            app.edit_state.as_mut().unwrap().focused_field = field;
+            app.edit_state.as_mut().unwrap().cursor_position = 0;
+            
+            // FIX: Enable edit mode for description, otherwise input is ignored by edit_input_char
+            if field == EditField::Description {
+                app.edit_state.as_mut().unwrap().description_edit_mode = true;
+            }
+            
+            // Type 'A'
+            app.edit_input_char('A');
+            assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 1);
+            
+            // Move Left
+            app.move_cursor_left();
+            assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 0);
+            
+            // Move Right
+            app.move_cursor_right();
+            assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 1);
+            
+            // Move Home
+            app.move_cursor_home();
+            assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 0);
+            
+            // Move End
+            app.move_cursor_end();
+            assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 1);
+            
+            // Backspace
+            app.edit_input_backspace();
+            assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 0);
+        }
+
+        // Test all text fields to hit all match arms
+        test_field(&mut app, EditField::Title);
+        test_field(&mut app, EditField::Category);
+        test_field(&mut app, EditField::DueDate);
+        
+        // Description is special (multiline)
+        test_field(&mut app, EditField::Description);
+    }
+
+    #[test]
+    fn test_external_editor_logic() {
+        // We can't easily test the actual Command::spawn in unit tests without mocking,
+        // but we can test the guards.
+        let mut app = create_test_app();
+
+        // 1. Should fail if empty column
+        app.data.projects[0].columns[0].cards.clear();
+        app.open_external_editor(); // Should return early
+
+        // 2. Should fail if not in Normal/View mode
+        app.mode = InputMode::Editing;
+        app.open_external_editor(); // Should return early
+    }
+
+    #[test]
+    fn test_coverage_booster() {
+        let mut app = create_test_app();
+
+        // 1. Test move_cursor_home/end on single line fields
+        app.start_new_card();
+        app.edit_state.as_mut().unwrap().focused_field = EditField::Title;
+        app.edit_state.as_mut().unwrap().title = "Hello".to_string();
+        app.edit_state.as_mut().unwrap().cursor_position = 2;
+
+        app.move_cursor_home();
+        assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 0);
+
+        app.move_cursor_end();
+        assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 5);
+
+        // 2. Test edit_input_char with Carriage Return (\r)
+        app.edit_state.as_mut().unwrap().focused_field = EditField::Description;
+        app.edit_state.as_mut().unwrap().description_edit_mode = true;
+        app.edit_state.as_mut().unwrap().cursor_position = 0;
+        app.edit_input_char('\r'); // Should become \n
+        assert_eq!(app.edit_state.as_ref().unwrap().description, "\n");
+
+        // 3. Test delete_current_card on empty column (Guard clause)
+        app.data.projects[0].columns[0].cards.clear();
+        app.delete_current_card(); // Should not panic
+
+        // 4. Test confirm_delete_column on empty project (Guard clause)
+        app.data.projects[0].columns.clear();
+        app.confirm_delete_column(); // Should not panic
+
+        // 5. Test move_card_left/right on boundaries
+        // Reset data
+        app = create_test_app();
+        app.current_col_idx = 0;
+        app.move_card_left(); // Should do nothing
+        assert_eq!(app.current_col_idx, 0);
+
+        app.current_col_idx = 1; // Last column
+        app.move_card_right(); // Should do nothing
+        assert_eq!(app.current_col_idx, 1);
+
+        // 6. Test move_card_internal empty guard
+        app.data.projects[0].columns[1].cards.clear();
+        app.current_col_idx = 1;
+        app.move_card_left(); // Should return early because no cards to move
+        assert_eq!(app.data.projects[0].columns[0].cards.len(), 0); // Target unchanged
+    }
+
+    #[test]
+    fn test_tag_color_fallback_integration() {
+        let mut app = create_test_app();
+        // Add a tag with NO color to a card
+        let tag = Tag {
+            name: "GlobalTag".into(),
+            color: None,
+        };
+
+        // Add definition to global
+        app.data.known_tags.push(Tag {
+            name: "GlobalTag".into(),
+            color: Some("Blue".into()),
+        });
+
+        // The app logic uses data.get_tag_color, verify it works via app instance
+        let color = app.data.get_tag_color(&tag);
+        assert_eq!(color, ratatui::style::Color::Blue);
     }
 }
