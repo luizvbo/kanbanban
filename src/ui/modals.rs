@@ -1,7 +1,6 @@
 use crate::app::state::EditField;
 use crate::app::{App, InputMode};
 use crate::ui::widgets::{centered_rect, create_input_block, parse_markdown};
-use ratatui::layout::Rect;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout},

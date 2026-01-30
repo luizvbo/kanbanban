@@ -13,9 +13,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, BorderType, Borders, Clear},
+    widgets::Clear,
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {

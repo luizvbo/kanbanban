@@ -169,22 +169,29 @@ pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 pub fn get_card_height(card: &Card) -> u16 {
-    let mut h = 2; // Borders
-    h += 1; // Title
+    let mut h = 2; // Top and Bottom Borders
+
+    // 1. Title row (always 1)
+    h += 1;
+
+    // 2. Tags row
     if !card.tags.is_empty() {
         h += 1;
     }
+
+    // 3. Due Date row
     if card.due_date.is_some() {
         h += 1;
     }
 
-    // Estimate description height (simple line count approximation)
-    // For perfect scrolling, we'd need to wrap text based on width, but that's expensive here.
-    // We'll assume 1 line per newline + 1 buffer.
-    let desc_lines = card.description.matches('\n').count() as u16 + 1;
-    // Cap description preview at 4 lines for calculation stability if needed,
-    // or use actual lines. Let's use actual lines but clamp min.
-    h += std::cmp::max(1, desc_lines);
+    // 4. Description Preview
+    // We now fix this to a maximum of 2 lines for the board view.
+    // If empty, we still give it 1 line for "No description" or empty space.
+    if card.description.trim().is_empty() {
+        h += 1;
+    } else {
+        h += 2;
+    }
 
     h
 }
@@ -206,10 +213,10 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
         .border_type(border_type)
         .border_style(border_style);
 
-    let inner = block.inner(area); // FIX: Call inner before moving block
+    let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Layout
+    // Layout Constraints
     let mut constraints = vec![Constraint::Length(1)]; // Title
     if !card.tags.is_empty() {
         constraints.push(Constraint::Length(1));
@@ -217,12 +224,14 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
     if card.due_date.is_some() {
         constraints.push(Constraint::Length(1));
     }
-    constraints.push(Constraint::Min(1)); // Description
+
+    // FIX: Fixed length for description area (2 lines)
+    constraints.push(Constraint::Length(2));
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
-        .split(inner); // Use pre-calculated inner
+        .split(inner);
 
     let mut chunk_idx = 0;
 
@@ -246,11 +255,10 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
     f.render_widget(Paragraph::new(Line::from(title_spans)), chunks[chunk_idx]);
     chunk_idx += 1;
 
-    // 2. Tags
+    // --- 2. Tags ---
     if !card.tags.is_empty() {
         let mut tag_spans = Vec::new();
         for tag in &card.tags {
-            // FIX: Use data.get_tag_color
             let color = data.get_tag_color(tag);
             tag_spans.push(Span::styled(
                 format!(" #{} ", tag.name),
@@ -262,21 +270,51 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
         chunk_idx += 1;
     }
 
-    // 3. Date
+    // --- 3. Date ---
     if let Some(date_str) = &card.due_date {
-        // ... (Date logic same as before)
         let date_display = Span::styled(
             format!("🕒 {}", date_str),
             Style::default().fg(Color::DarkGray),
-        ); // Simplified for brevity
+        );
         f.render_widget(Paragraph::new(date_display), chunks[chunk_idx]);
         chunk_idx += 1;
     }
 
-    // 4. Description
-    let markdown_text = parse_markdown(&card.description);
-    f.render_widget(
-        Paragraph::new(markdown_text).wrap(Wrap { trim: true }),
-        chunks[chunk_idx],
-    );
+    // --- 4. Description (Cropped to 2 lines) ---
+    let full_markdown = parse_markdown(&card.description);
+    let total_parsed_lines = full_markdown.lines.len();
+    let mut display_text = Vec::new();
+
+    // Only take the first two parsed lines
+    for (i, line) in full_markdown.lines.iter().enumerate().take(2) {
+        let mut new_line = line.clone();
+
+        // If this is the second line and there's more content, append the hint
+        let is_overflowing = (i == 1 && total_parsed_lines > 2)
+            || (i == 0 && total_parsed_lines > 1 && total_parsed_lines <= 2);
+
+        if is_overflowing {
+            new_line.spans.push(Span::styled(
+                " ... [v] Details",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ));
+        }
+
+        display_text.push(new_line);
+    }
+
+    if display_text.is_empty() && !card.description.is_empty() {
+        // Fallback for weird parsing edge cases
+        f.render_widget(
+            Paragraph::new("... Press v for details").style(Style::default().fg(Color::DarkGray)),
+            chunks[chunk_idx],
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(display_text).wrap(Wrap { trim: true }),
+            chunks[chunk_idx],
+        );
+    }
 }
