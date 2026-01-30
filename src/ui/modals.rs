@@ -1,6 +1,7 @@
 use crate::app::state::EditField;
 use crate::app::{App, InputMode};
 use crate::ui::widgets::{centered_rect, create_input_block, parse_markdown};
+use ratatui::layout::Rect;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -10,36 +11,26 @@ use ratatui::{
 };
 
 pub fn draw_input_modal(f: &mut Frame, title: &str, input: &str) {
-    let area = centered_rect(50, 15, f.area());
+    // Shorter height (3 lines instead of 15% of screen)
+    let area = centered_rect(60, 3, f.area());
     f.render_widget(Clear, area);
 
     let block = Block::default()
-        .title(title)
+        .title(Span::styled(
+            title,
+            Style::default().add_modifier(Modifier::BOLD),
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let input_widget = Paragraph::new(input)
+    let input_widget = Paragraph::new(format!("> {}", input))
         .style(Style::default().fg(Color::Yellow))
-        .block(Block::default().borders(Borders::NONE));
+        .block(block);
 
-    let vertical_center = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .split(inner);
+    f.render_widget(input_widget, area);
 
-    f.render_widget(input_widget, vertical_center[1]);
-
-    f.set_cursor_position((
-        vertical_center[1].x + input.len() as u16,
-        vertical_center[1].y,
-    ));
+    // Position cursor after the "> " and input text
+    f.set_cursor_position((area.x + 3 + input.len() as u16, area.y + 1));
 }
 
 pub fn draw_column_delete_modal(f: &mut Frame, app: &App) {
@@ -445,7 +436,7 @@ pub fn draw_edit_popup(f: &mut Frame, app: &mut App) {
             Paragraph::new(cat_text).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Category")
+                    .title("Category (Enter to Select)")
                     .border_style(cat_style),
             ),
             chunks[1],
@@ -567,56 +558,122 @@ pub fn draw_edit_popup(f: &mut Frame, app: &mut App) {
     }
 }
 
-pub fn draw_help_popup(f: &mut Frame) {
-    let area = centered_rect(60, 60, f.area());
+pub fn draw_help_popup(f: &mut Frame, app: &App) {
+    let area = centered_rect(70, 80, f.area());
+    f.render_widget(Clear, area);
 
-    let help_text = vec![
-        Line::from(Span::styled(
-            "Kanban TUI Help",
+    let app_name = env!("CARGO_PKG_NAME").to_uppercase();
+    let app_version = env!("CARGO_PKG_VERSION");
+
+    // Explicitly define the Vec as holding 'static lifetimes
+    let mut help_text: Vec<Line<'static>> = Vec::new();
+
+    // --- Header ---
+    help_text.push(Line::from(vec![
+        Span::styled(
+            format!(" {} ", app_name),
             Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Yellow),
-        )),
-        Line::from(""),
-        Line::from(Span::styled("Navigation", Style::default().fg(Color::Cyan))),
-        Line::from("  h / l            : Move between columns"),
-        Line::from("  j / k            : Move between cards"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Card Actions",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from("  H / L            : Move card Left/Right"),
-        Line::from("  J / K            : Move card Up/Down"),
-        Line::from("  a / n            : Add new card"),
-        Line::from("  i / e / Enter    : Edit card"),
-        Line::from("  d                : Delete card"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Column Actions",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from("  c                : New Column"),
-        Line::from("  r                : Rename Column"),
-        Line::from("  D                : Delete Column"),
-        Line::from("  < / >            : Move Column Left/Right"),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Board Actions",
-            Style::default().fg(Color::Cyan),
-        )),
-        Line::from("  R                : Rename Board"),
-        Line::from(""),
-        Line::from(Span::styled("General", Style::default().fg(Color::Cyan))),
-        Line::from("  ?                : Toggle this popup"),
-        Line::from("  q                : Quit"),
-    ];
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" v{} ", app_version),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+    help_text.push(Line::from(""));
+
+    // --- Closure with owned String conversion ---
+    // We use .to_string() on title and desc to move ownership into the Line
+    let add_section = |lines: &mut Vec<Line<'static>>, title: &str, bindings: Vec<(&str, &str)>| {
+        lines.push(Line::from(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for (key, desc) in bindings {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:>10} ", key), Style::default().fg(Color::Cyan)),
+                Span::raw("→ "),
+                Span::styled(desc.to_string(), Style::default().fg(Color::White)),
+            ]));
+        }
+        lines.push(Line::from(""));
+    };
+
+    // --- Content Sections ---
+    add_section(
+        &mut help_text,
+        "Navigation",
+        vec![
+            ("h / l", "Switch Columns"),
+            ("j / k", "Select Card"),
+            ("v", "View Details"),
+            ("/", "Filter Board"),
+        ],
+    );
+
+    add_section(
+        &mut help_text,
+        "Card Actions",
+        vec![
+            ("a / n", "Add New Card"),
+            ("Enter", "Edit Card"),
+            ("d", "Delete Card"),
+            ("o", "External Editor (Vim/Nano)"),
+        ],
+    );
+
+    add_section(
+        &mut help_text,
+        "Movement",
+        vec![
+            ("H / L", "Move Card to Left/Right Column"),
+            ("J / K", "Move Card Up/Down in Column"),
+            ("< / >", "Reorder Columns"),
+        ],
+    );
+
+    add_section(
+        &mut help_text,
+        "Board/Column",
+        vec![
+            ("R", "Rename Board"),
+            ("r", "Rename Column"),
+            ("c", "Create New Column"),
+            ("D", "Delete Current Column"),
+        ],
+    );
+
+    // --- Footer / Path ---
+    // Added a simple separator line
+    help_text.push(Line::from(Span::styled(
+        "─".repeat(area.width as usize - 4),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    help_text.push(Line::from(vec![
+        Span::styled(" Storage Path: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            app.filepath.to_string_lossy().to_string(),
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ]));
 
     let block = Block::default()
-        .title(" Help ")
+        .title(" Help Menu ")
         .borders(Borders::ALL)
-        .style(Style::default().bg(Color::DarkGray));
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan));
 
-    f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(help_text).block(block), area);
+    f.render_widget(
+        Paragraph::new(help_text)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }

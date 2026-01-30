@@ -9,6 +9,7 @@ use crate::ui::modals::{
     draw_edit_popup, draw_exit_confirmation, draw_help_popup, draw_input_modal, draw_tag_selector,
 };
 use crate::ui::widgets::{draw_filter_bar, draw_footer};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::{
     Frame,
@@ -23,26 +24,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(1),
             Constraint::Min(0),
-            Constraint::Length(3),
+            Constraint::Length(1),
         ])
         .split(f.area());
 
     let project_name = &app.current_project().name;
-    let title_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" Kanban TUI ");
-    let title_text = Paragraph::new(format!("Project: {}", project_name))
-        .style(
+    let header = Line::from(vec![
+        Span::styled(
+            " KANBANBAN ",
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Project: "),
+        Span::styled(
+            project_name,
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )
-        .alignment(Alignment::Center)
-        .block(title_block);
-    f.render_widget(title_text, chunks[0]);
+        ),
+    ]);
+    f.render_widget(Paragraph::new(header), chunks[0]);
 
     draw_board(f, app, chunks[1]);
     draw_footer(f, app, chunks[2]);
@@ -52,7 +57,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     match app.mode {
-        InputMode::Help => draw_help_popup(f),
+        InputMode::Help => draw_help_popup(f, app),
         InputMode::Editing => draw_edit_popup(f, app),
         InputMode::TagSelection => {
             draw_edit_popup(f, app);

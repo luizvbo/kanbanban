@@ -119,57 +119,36 @@ pub fn create_input_block<'a>(title: &'a str, content: &'a str, is_focused: bool
 }
 
 pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let mode_str = match app.mode {
-        InputMode::Normal => " NORMAL ",
-        InputMode::Editing => " EDITING ",
-        InputMode::TagSelection => " TAGS ",
-        InputMode::CategorySelection => " CATEGORY ",
-        InputMode::Help => " HELP ",
-        InputMode::ExitingModal => " CONFIRM ",
-        InputMode::DeleteConfirmation => " DELETE CARD ",
-        InputMode::ProjectRename => " RENAME BOARD ",
-        InputMode::ColumnRename => " RENAME COL ",
-        InputMode::ColumnNew => " NEW COL ",
-        InputMode::ColumnDelete => " DELETE COL ",
-        InputMode::ViewCard => " VIEW ",
-        InputMode::Filter => " FILTER ",
+    let mode_str = format!(
+        " {} ",
+        match app.mode {
+            InputMode::Normal => "NORMAL",
+            InputMode::Editing => "EDIT",
+            InputMode::ViewCard => "VIEW",
+            InputMode::Filter => "FILTER",
+            _ => "BUSY",
+        }
+    );
+
+    let help_text = match app.mode {
+        InputMode::Editing => " [Esc] Back/Save | [Tab] Cycle | [o] Editor | [Enter] Select/Edit ",
+        InputMode::Normal => {
+            " [q] Quit | [?] Help | [v] View | [a] Add | [h/j/k/l] Nav | [H/J/K/L] Move "
+        }
+        InputMode::ViewCard => " [Esc/q] Close | [j/k] Scroll | [o] Editor ",
+        _ => " [Esc] Return to Normal ",
     };
-    let mode_color = match app.mode {
-        InputMode::Normal => Color::Blue,
-        InputMode::Editing => Color::Yellow,
-        InputMode::TagSelection => Color::Magenta,
-        InputMode::CategorySelection => Color::Magenta,
-        InputMode::Help => Color::Green,
-        InputMode::ExitingModal => Color::Red,
-        InputMode::DeleteConfirmation => Color::Red,
-        InputMode::ProjectRename => Color::Cyan,
-        InputMode::ColumnRename => Color::Cyan,
-        InputMode::ColumnNew => Color::Green,
-        InputMode::ColumnDelete => Color::Red,
-        InputMode::ViewCard => Color::LightBlue,
-        InputMode::Filter => Color::Yellow,
-    };
-    let mut status_text = " [q] Quit | [?] Help ".to_string();
-    if let Some(msg) = &app.status_message
-        && let Some(time) = app.status_time
-        && time.elapsed().as_secs() < 3
-    {
-        status_text = format!(" {} ", msg);
-    }
     let text = Line::from(vec![
         Span::styled(
             mode_str,
             Style::default()
-                .bg(mode_color)
+                .bg(Color::Blue)
                 .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(status_text),
+        Span::styled(help_text, Style::default().fg(Color::Gray)),
     ]);
-    f.render_widget(
-        Paragraph::new(text).block(Block::default().borders(Borders::TOP)),
-        area,
-    );
+    f.render_widget(Paragraph::new(text), area);
 }
 
 pub fn draw_filter_bar(f: &mut Frame, app: &App) {
