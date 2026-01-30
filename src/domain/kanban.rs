@@ -5,6 +5,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+/// Represents a label attached to a card.
+/// Tags can have an optional color. if None, the app looks up
+/// the color in the global `known_tags` list.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Tag {
     pub name: String,
@@ -38,6 +41,7 @@ impl Tag {
     }
 }
 
+/// The fundamental unit of the Kanban board.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Card {
     pub title: String,
@@ -47,10 +51,13 @@ pub struct Card {
     pub due_date: Option<String>,
 }
 
+/// A vertical list containing cards.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Column {
     pub title: String,
     pub cards: Vec<Card>,
+    /// UI-only state: tracks vertical scrolling within this column
+    /// ignored during YAML serialization.
     #[serde(skip)]
     pub scroll_offset: usize,
 }
@@ -61,9 +68,12 @@ pub struct Project {
     pub columns: Vec<Column>,
 }
 
+/// Root structure for YAML persistence.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KanbanData {
     pub projects: Vec<Project>,
+    /// Global registry of tags and their colors to ensure
+    /// consistency across the whole board.
     #[serde(default)]
     pub known_tags: Vec<Tag>,
 }
@@ -166,7 +176,10 @@ impl KanbanData {
         Ok(())
     }
 
-    // FIX: Logic to resolve color: Local -> Global -> Default
+    /// Resolves a tag's color using a hierarchy:
+    /// 1. Use specific color on the card's tag if present.
+    /// 2. Use color from global `known_tags` if names match.
+    /// 3. Fallback to White.
     pub fn get_tag_color(&self, tag: &Tag) -> Color {
         // 1. Check if card tag has specific color override
         if let Some(c) = &tag.color {

@@ -9,6 +9,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
+/// The main drawing loop for the Kanban columns.
+/// It splits the available area into equal chunks based on column count.
 pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
     let project_idx = app.current_project_idx;
     let n_columns = app.data.projects[project_idx].columns.len();
@@ -168,7 +170,12 @@ pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Calculates the height of a card based on which fields are populated.
+/// This must return a consistent value to ensure the board's vertical
+/// scrolling doesn't jitter.
 pub fn get_card_height(card: &Card) -> u16 {
+    // Current design uses a fixed 2-line max for descriptions
+    // to keep the board compact.
     let mut h = 2; // Top and Bottom Borders
 
     // 1. Title row (always 1)
@@ -196,6 +203,8 @@ pub fn get_card_height(card: &Card) -> u16 {
     h
 }
 
+/// Renders an individual card widget.
+/// Handles text truncation and the "... [v] Details" hint.
 pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data: &KanbanData) {
     let (border_style, border_type) = if is_selected {
         (

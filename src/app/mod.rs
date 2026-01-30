@@ -6,52 +6,91 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// Defines the possible interaction states of the application.
+/// Used by the event handler to determine how to interpret key presses
+/// and by the UI to determine which modals to render.
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum InputMode {
+    /// Main board navigation
     Normal,
+    /// Editing a specific card's fields
     Editing,
+    /// Modal for picking tags
     TagSelection,
+    /// Modal for picking/creating categories
     CategorySelection,
+    /// Information overlay
     Help,
+    /// Confirming if unsaved changes should be kept
     ExitingModal,
+    /// Confirming card deletion
     DeleteConfirmation,
+    /// Input for board name
     ProjectRename,
+    /// Input for column name
     ColumnRename,
+    /// Input for new column title
     ColumnNew,
+    /// Confirming column (and its cards) deletion
     ColumnDelete,
+    /// Scrollable full-text view of a card
     ViewCard,
+    /// Search/Filter mode
     Filter,
 }
 
+/// The central state controller of the application.
+///
+/// This struct holds the Kanban data, UI state, navigation indices,
+/// and sub-states for modals (editing, tag selection, etc.).
 pub struct App {
+    /// The actual Kanban data (projects, columns, cards, tags)
     pub data: KanbanData,
+    /// Path to the persistence file (usually kbb.yaml)
     pub filepath: PathBuf,
+    /// Flag to signal the main loop to terminate
     pub should_quit: bool,
 
-    // UI State
+    // --- UI State ---
+    /// Current interaction mode
     pub mode: InputMode,
+    /// Tracks previous mode for returning from temporary modals (like Help or Confirm)
     pub previous_mode: Option<InputMode>,
+    /// Temporary text shown in the footer
     pub status_message: Option<String>,
+    /// When the status message was set (used for auto-hiding)
     pub status_time: Option<Instant>,
+    /// Vertical scroll offset for the Detail View
     pub view_scroll_y: u16,
+    /// Flag to force a full terminal clear (e.g., after returning from Vim)
     pub should_redraw: bool,
 
-    // Navigation State
+    // --- Navigation State (Pointer Indices) ---
+    /// We use indices instead of references to the data because Rust's
+    /// borrow checker would prevent us from holding a reference to a
+    /// Card while also needing a mutable reference to the App to handle events.
     pub current_project_idx: usize,
     pub current_col_idx: usize,
     pub current_card_idx: usize,
 
-    // Sub-States
+    // --- Sub-States (Contextual Data) ---
+    /// State container for the card editor
     pub edit_state: Option<EditState>,
+    /// State container for the tag picker
     pub tag_selector_state: Option<TagSelectorState>,
+    /// State container for the category picker
     pub category_selector_state: Option<CategorySelectorState>,
 
-    // Temporary Input Buffers
+    // --- Temporary Input Buffers ---
+    /// Buffer for renaming projects/columns
     pub prompt_input: String,
+    /// Buffer for the global search filter
     pub filter_query: String,
 }
 
 impl App {
+    /// Initializes a new App instance by loading data from the provided path.
+    /// If the file doesn't exist, it initializes with default Kanban board structure.
     pub fn new(filepath: PathBuf) -> Result<Self> {
         let data = KanbanData::load(&filepath)?;
         Ok(Self {
@@ -75,16 +114,19 @@ impl App {
         })
     }
 
-    // --- Helpers ---
+    // --- Data Access Helpers ---
 
+    /// Returns a reference to the project currently being viewed.
     pub fn current_project(&self) -> &Project {
         &self.data.projects[self.current_project_idx]
     }
 
+    /// Returns a mutable reference to the project currently being viewed.
     pub fn current_project_mut(&mut self) -> &mut Project {
         &mut self.data.projects[self.current_project_idx]
     }
 
+    /// Serializes current state to the YAML file and updates the UI status message.
     pub fn save_with_feedback(&mut self) {
         match self.data.save(&self.filepath) {
             Ok(_) => {
@@ -98,10 +140,12 @@ impl App {
         }
     }
 
+    /// Signals the application to close.
     pub fn quit(&mut self) {
         self.should_quit = true;
     }
 
+    /// Toggles the help overlay.
     pub fn toggle_help(&mut self) {
         match self.mode {
             InputMode::Normal => self.mode = InputMode::Help,
@@ -110,7 +154,7 @@ impl App {
         }
     }
 
-    // --- Filter Logic ---
+    // --- Filter / Search Logic ---
 
     pub fn start_filter(&mut self) {
         self.mode = InputMode::Filter;
@@ -133,6 +177,7 @@ impl App {
         self.filter_query.pop();
     }
 
+    /// Logic for the global filter. Checks title, category, and tags.
     pub fn card_matches_filter(&self, card: &crate::domain::kanban::Card) -> bool {
         if self.filter_query.is_empty() {
             return true;
@@ -152,7 +197,7 @@ impl App {
         false
     }
 
-    // --- Navigation ---
+    // --- Navigation (Column/Card) ---
 
     pub fn next_column(&mut self) {
         let len = self.current_project().columns.len();
@@ -187,6 +232,9 @@ impl App {
         }
     }
 
+    /// Ensures card selection doesn't result in an "index out of bounds" error.
+    /// MUST be called whenever columns are swapped, cards are moved, or
+    /// the filter query is updated.
     fn clamp_card_selection(&mut self) {
         let col = &self.current_project().columns[self.current_col_idx];
         if col.cards.is_empty() {
@@ -220,10 +268,12 @@ impl App {
         }
     }
 
-    // --- External Editor ---
+    // --- External Editor Handling ---
 
+    /// Spawns an external editor (Vim/Nano) to edit the card's long-form description.
+    /// This method suspends the TUI, runs the editor process, and resumes the TUI.
     pub fn open_external_editor(&mut self) {
-        // Guard: Only allow if Description is focused
+        // Validation: Editor is only available in Editing mode (focused on Description) or View mode.
         if self.mode == InputMode::Editing {
             if let Some(state) = &self.edit_state
                 && state.focused_field != EditField::Description
@@ -261,6 +311,7 @@ impl App {
             return;
         }
 
+        // TUI Suspension block (not compiled during unit tests)
         #[cfg(not(test))]
         {
             use crossterm::{
@@ -288,7 +339,7 @@ impl App {
             }
         }
 
-        // Reload content
+        // Read updated content back into the app state
         if let Ok(content) = std::fs::read_to_string(&temp_file) {
             if self.mode == InputMode::Editing {
                 if let Some(state) = &mut self.edit_state {
@@ -487,7 +538,32 @@ impl App {
         self.mode = InputMode::Normal;
     }
 
-    // --- Card Movement ---
+    // --- Card Movement Logic ---
+
+    /// Moves a card from one column to another.
+    /// Used for board organization and workflow progression (e.g., Todo -> Done).
+    fn move_card_internal(&mut self, from_col: usize, to_col: usize) {
+        let card_idx = self.current_card_idx;
+        let card = {
+            let project = self.current_project_mut();
+            let from_column = &mut project.columns[from_col];
+            if from_column.cards.is_empty() {
+                return;
+            }
+            from_column.cards.remove(card_idx)
+        };
+
+        {
+            let project = self.current_project_mut();
+            project.columns[to_col].cards.push(card);
+        }
+
+        self.current_col_idx = to_col;
+        let project = self.current_project();
+        let new_len = project.columns[to_col].cards.len();
+        self.current_card_idx = if new_len > 0 { new_len - 1 } else { 0 };
+        self.save_with_feedback();
+    }
 
     pub fn move_card_up(&mut self) {
         let col_idx = self.current_col_idx;
@@ -530,29 +606,6 @@ impl App {
             return;
         }
         self.move_card_internal(current_col_idx, current_col_idx + 1);
-    }
-
-    fn move_card_internal(&mut self, from_col: usize, to_col: usize) {
-        let card_idx = self.current_card_idx;
-        let card = {
-            let project = self.current_project_mut();
-            let from_column = &mut project.columns[from_col];
-            if from_column.cards.is_empty() {
-                return;
-            }
-            from_column.cards.remove(card_idx)
-        };
-
-        {
-            let project = self.current_project_mut();
-            project.columns[to_col].cards.push(card);
-        }
-
-        self.current_col_idx = to_col;
-        let project = self.current_project();
-        let new_len = project.columns[to_col].cards.len();
-        self.current_card_idx = if new_len > 0 { new_len - 1 } else { 0 };
-        self.save_with_feedback();
     }
 
     // --- Card Deletion ---
@@ -730,12 +783,14 @@ impl App {
         }
     }
 
+    /// Logic for cycling through fields (Title, Category, Tags, etc.) inside the card editor.
     pub fn cycle_edit_field(&mut self, reverse: bool) {
         if let Some(state) = &mut self.edit_state {
             if state.focused_field == EditField::Description && state.description_edit_mode {
                 return;
             }
 
+            // Simple state machine for field focusing
             state.focused_field = if reverse {
                 match state.focused_field {
                     EditField::Title => EditField::Description,
@@ -754,6 +809,7 @@ impl App {
                 }
             };
 
+            // Reset cursor and scroll when switching fields
             let text_len = match state.focused_field {
                 EditField::Title => state.title.len(),
                 EditField::Category => state.category.len(),
@@ -900,7 +956,9 @@ impl App {
     }
 
     // --- Prompt Input Helpers ---
-
+    // These methods manage the `prompt_input` string buffer.
+    // This buffer is shared across Rename Board, Rename Column, and New Column
+    // modes to avoid allocating multiple temporary strings.
     pub fn prompt_input_char(&mut self, c: char) {
         self.prompt_input.push(c);
     }
@@ -915,6 +973,12 @@ impl App {
 
     // --- Tag Selector (Delegates to TagSelectorState) ---
 
+    // These methods handle the transition between InputModes and initialize
+    // the temporary "Sub-States" needed for complex interactions like
+    // searching for tags or choosing categories.
+
+    /// Prepares the TagSelector sub-state and switches the app mode.
+    /// This "snapshots" the current tags so they can be edited in isolation.
     pub fn open_tag_selector(&mut self) {
         if let Some(state) = &self.edit_state {
             self.tag_selector_state = Some(TagSelectorState::new(
@@ -1363,7 +1427,6 @@ mod tests {
     fn test_card_movement_horizontal_boundaries() {
         let mut app = create_test_app();
 
-        // FIX: Add a card to Col 0 so we have something to move.
         // create_test_app initializes columns as empty.
         app.data.projects[0].columns[0].cards.push(Card {
             title: "MoveMe".into(),
@@ -1450,7 +1513,6 @@ mod tests {
             app.edit_state.as_mut().unwrap().focused_field = field;
             app.edit_state.as_mut().unwrap().cursor_position = 0;
 
-            // FIX: Enable edit mode for description, otherwise input is ignored by edit_input_char
             if field == EditField::Description {
                 app.edit_state.as_mut().unwrap().description_edit_mode = true;
             }

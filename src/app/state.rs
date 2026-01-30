@@ -91,6 +91,8 @@ impl TagSelectorState {
     }
 }
 
+/// Temporary state used when creating or editing a card.
+/// We don't edit the Card struct directly to allow "Cancel without saving."
 pub struct EditState {
     pub title: String,
     pub category: String,
@@ -102,6 +104,7 @@ pub struct EditState {
     pub cursor_position: usize,
     pub scroll_x: u16,
     pub scroll_y: u16,
+    /// When true, Enter key inserts a newline. When false, Enter cycles fields.
     pub description_edit_mode: bool,
 }
 
@@ -144,6 +147,7 @@ impl EditState {
         }
     }
 
+    /// Converts the current "draft" back into a Card struct for persistence.
     pub fn into_card(self) -> Card {
         Card {
             title: if self.title.is_empty() {
@@ -170,6 +174,8 @@ impl EditState {
         self.title.trim().is_empty() && self.description.trim().is_empty() && self.tags.is_empty()
     }
 
+    /// Calculates (x, y) coordinates for the terminal cursor.
+    /// Necessary for multi-line description editing with proper wrapping.
     pub fn get_cursor_position_2d(&self, _width: u16) -> (u16, u16) {
         let text = match self.focused_field {
             EditField::Title => &self.title,

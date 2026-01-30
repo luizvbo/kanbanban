@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::app::state::EditField;
 use crate::app::{App, InputMode};
 
+/// Reacts to keyboard input when the app is in 'Normal' mode (navigating the board).
 pub fn handle_normal(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('q') => app.quit(),
@@ -90,6 +91,9 @@ pub fn handle_delete_confirmation(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Handles the complex logic of the card editor.
+/// Note: This differentiates between moving the cursor/cycling fields
+/// and actually typing text into the description.
 pub fn handle_editing(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {

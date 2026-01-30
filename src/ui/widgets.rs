@@ -28,6 +28,11 @@ pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+/// Iterates through CommonMark events and maps them to Ratatui Styles.
+/// Supports: Bold, Italics, Lists, and Headings.
+///
+/// Note: This handles the logic for double line-breaks to ensure
+/// paragraphs are visually separated.
 pub fn parse_markdown(content: &str) -> Text<'_> {
     let mut lines = Vec::new();
     let parser = Parser::new(content);
