@@ -24,3 +24,7 @@ lto = "thin"
 
 [workspace.metadata.typos.default.extend-words]
 ratatui = "ratatui"
+
+[[bin]]
+name = "kbb"
+path = "src/main.rs"
