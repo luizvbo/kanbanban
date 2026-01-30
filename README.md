@@ -1,46 +1,31 @@
-# Kanbanban
+# Kanbanban 🦀
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Crates.io](https://img.shields.io/crates/v/kanbanban.svg)](https://crates.io/crates/kanbanban)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 
-**Kanbanban** is a fast, terminal-based Kanban board written in Rust.
+**Kanbanban** is a high-performance, terminal-based Kanban board written in Rust.
 
-It is a high-performance port of the Python [kanban-tui](https://github.com/Zaloog/kanban-tui), rewritten to utilize the efficiency of Rust and the [Ratatui](https://ratatui.rs/) ecosystem. It features a modal interface, mouse support, and structured logging.
+Version 1.0.0 represents a complete architectural shift, focusing on a **modal-driven interface**, **Markdown task descriptions**, and deep integration with your terminal environment (using your system's `$EDITOR` like Vim or Nano).
 
-## 🚀 Features
+## Features
 
-- **⚡ Blazing Fast:** Native binary with minimal resource usage.
-- **📋 Full Kanban Workflow:** Create boards, columns, and tasks. Move tasks between columns with Vim-like keys or Drag & Drop.
-- **🖱️ Mouse Support:** Click to select tasks/boards, drag to move tasks between columns.
-- **📊 Visualization:** Built-in charts showing task distribution by category.
-- **📝 JSONL Audit Logs:** An append-only, streaming audit log system that keeps history without bloating memory.
-- **📅 Date Picker:** A visual calendar widget for selecting due dates.
-- **🏷️ Categories:** Color-coded categories for better task organization.
-- **⚙️ Configurable:** Supports XDG configuration standards.
+- **📝 Markdown Support:** Task descriptions now render with full Markdown support (bold, italics, lists, and headings).
+- **📟 External Editor Bridge:** Press `o` to instantly jump into Vim, Nano, or VS Code to write long-form task notes, then jump back into the TUI.
+- **🖼️ Modal-First UI:** A clean, focused editing experience that prevents accidental changes and maximizes vertical screen space.
+- **🏷️ Smart Tagging:** A global tag registry that ensures consistent coloring across your entire board.
+- **🏢 Category Management:** Organize cards into projects or categories with a dedicated selection modal.
+- **⚡ Performance:** Rewritten from the ground up for zero-latency navigation, even with thousands of tasks.
 
-## 📦 Installation
+## Installation
 
-<details>
-<summary>Standalone installer</summary>
-
-kanbanban provides a standalone installer script to download and install the tool.
-
-On Linux and macOS:
+### From crates.io (Recommended)
 
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/luizvbo/kanbanban/releases/latest/download/kanbanban-installer.sh | sh
+cargo install kanbanban
 ```
 
-On Windows:
-
-```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://github.com/luizvbo/kanbanban/releases/latest/download/kanbanban-installer.ps1 | iex"
-```
-
-</details>
-<details>
-
-<summary>From Source</summary>
+### From Source
 
 ```bash
 git clone https://github.com/luizvbo/kanbanban.git
@@ -48,94 +33,60 @@ cd kanbanban
 cargo install --path .
 ```
 
-</details>
+## Usage
 
-## 🎮 Usage
-
-Run the application:
+Simply run the binary. By default, it looks for `kbb.yaml` in your current directory, or you can specify a path:
 
 ```bash
-kanbanban
+kanbanban                     # Loads/Creates kbb.yaml
+kanbanban my_work_board.yaml  # Loads specific file
 ```
 
 ### Keybindings
 
-**Kanbanban** uses Vim-like navigation.
+**Kanbanban** uses a "Vim-lite" modal system.
 
-| Context    | Key                   | Action                                 |
-| :--------- | :-------------------- | :------------------------------------- |
-| **Global** | `q`                   | Quit application                       |
-|            | `b`                   | Switch to **Board** View               |
-|            | `v`                   | Switch to **Overview** (Charts/Logs)   |
-|            | `s`                   | Switch to **Settings** (Column Config) |
-|            | `C`                   | Switch to **Category Manager**         |
-|            | `B`                   | Switch to **Board Selector**           |
-| **Board**  | `h` / `j` / `k` / `l` | Navigate Columns/Tasks                 |
-|            | `H` / `L`             | Move selected task Left / Right        |
-|            | `n`                   | **N**ew Task                           |
-|            | `e`                   | **E**dit Task                          |
-|            | `d`                   | **D**elete Task                        |
-|            | `c`                   | New **C**olumn                         |
-|            | `D`                   | **D**elete Column                      |
+| Mode        | Key                 | Action                                      |
+| :---------- | :------------------ | :------------------------------------------ |
+| **Normal**  | `h` / `l`           | Switch Columns                              |
+|             | `j` / `k`           | Select Card                                 |
+|             | `a` / `n`           | **A**dd **N**ew Card                        |
+|             | `Enter` / `e`       | **E**dit Card                               |
+|             | `v`                 | **V**iew Details (Full Markdown)            |
+|             | `d`                 | **D**elete Card                             |
+|             | `H` / `L`           | Move Card to Left / Right Column            |
+|             | `J` / `K`           | Move Card Up / Down inside Column           |
+|             | `r` / `R`           | **R**ename Column / **R**ename Board        |
+|             | `/`                 | **Filter** cards by title, tag, or category |
+|             | `?`                 | Toggle Help Menu                            |
+| **Editing** | `Tab` / `Shift+Tab` | Cycle through Title, Category, Tags, etc.   |
+|             | `Enter`             | Edit selected field / Cycle to next         |
+|             | `o`                 | Open Description in **External Editor**     |
+|             | `Esc`               | Stop editing field / Exit Modal             |
 
-#### Task Modal (Two-Layer Navigation)
+## Data Storage
 
-The Task Modal separates **Navigation** from **Editing** to prevent accidental changes.
+Kanbanban stores everything in a single, human-readable **YAML** file.
 
-| State          | Key                 | Action                                      |
-| :------------- | :------------------ | :------------------------------------------ |
-| **Navigation** | `j` / `k`           | Select field up/down                        |
-|                | `Tab` / `Shift+Tab` | Cycle focus forward/backward                |
-|                | `Enter`             | **Edit** the selected field                 |
-|                | `Left` / `Right`    | Change Category (when Category selected)    |
-|                | `Ctrl` + `s`        | Save and close                              |
-|                | `Esc`               | Close (Prompts to save if modified)         |
-| **Editing**    | `Esc`               | Stop editing field (Return to Navigation)   |
-|                | `Enter`             | Confirm field (or new line for Description) |
-|                | `Ctrl` + `d`        | Open **Date Picker** (in Date field)        |
+- The default filename is `kbb.yaml`.
+- To see exactly where your data is saved, press `?` inside the app; the full file path is displayed at the bottom of the help menu.
 
-#### Other Modals (Board, Column, Category)
+## Contributing
 
-| Key                 | Action         |
-| :------------------ | :------------- |
-| `Tab` / `Shift+Tab` | Cycle focus    |
-| `Enter`             | Save and close |
-| `Ctrl` + `s`        | Save and close |
-| `Esc`               | Cancel         |
+We welcome contributions! The codebase is heavily documented to help you get started.
 
-### Mouse Support
+1. **Check the logic:** See `src/app/mod.rs` for the main application state.
+2. **Change the look:** Check `src/ui/board.rs` for the Kanban rendering logic.
+3. **Add a feature:** Add your new hotkey to `src/handler/modes.rs`.
 
-- **Click** on a task or column to select it.
-- **Drag and Drop** a task from one column to another to move it.
+Please run `cargo fmt` and `cargo test` before submitting a Pull Request.
 
-## 📂 Data & Configuration
-
-Kanbanban follows XDG Base Directory specifications.
-
-- **Database:** `~/.local/share/kanbanban/kanbanban.yaml` (YAML format for Board/Task state).
-- **Audit Logs:** `~/.local/share/kanbanban/kanbanban_audit.jsonl`.
-- **Config:** `~/.config/kanbanban/config.toml`.
-
-### Audit Logs (JSONL)
-
-Unlike the original Python implementation which stored logs in the main database, **Kanbanban** uses **JSON Lines (.jsonl)**.
-
-- **Append-Only:** extremely fast writing.
-- **Streaming Read:** The UI only loads the last 100 entries, keeping memory usage low even with thousands of history events.
-- **Parsable:** You can use tools like `jq` to analyze your own productivity history.
-
-## 🏗️ Architecture
-
-- **Backend:** Rust (File-based persistence).
-- **TUI Framework:** [Ratatui](https://github.com/ratatui-org/ratatui).
-- **Input Handling:** Crossterm.
-- **Serialization:** Serde (YAML for state, JSON for logs).
-
-## 🤝 Attribution
-
-This project is a port of [kanban-tui](https://github.com/Zaloog/kanban-tui) by Zaloog.
-While the codebase has been rewritten in Rust with architectural changes (JSONL logs, custom widgets), the design philosophy and feature set are heavily inspired by the original work.
-
-## 📄 License
+## License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+---
+
+### Architecture Note
+
+_Version 1.0.0 introduces breaking changes to the YAML format compared to older 0.x versions to support the new Markdown and Category features._
