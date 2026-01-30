@@ -79,7 +79,7 @@ We welcome contributions! The codebase is heavily documented to help you get sta
 2. **Change the look:** Check `src/ui/board.rs` for the Kanban rendering logic.
 3. **Add a feature:** Add your new hotkey to `src/handler/modes.rs`.
 
-Please run `cargo fmt` and `cargo test` before submitting a Pull Request.
+Please see [DEVELOPMENT.md](DEVELOPMENT.md) for instructions on our workflow, testing, and release process.
 
 ## License
 
