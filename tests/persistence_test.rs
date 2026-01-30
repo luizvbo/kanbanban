@@ -1,4 +1,4 @@
-use kanbanban::types::{Card, KanbanData, Tag};
+use kanbanban::domain::kanban::{Card, KanbanData, Tag};
 use tempfile::NamedTempFile;
 
 #[test]

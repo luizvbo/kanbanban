@@ -1,6 +1,6 @@
 pub mod app;
-pub mod events;
-pub mod types;
+pub mod domain;
+pub mod handler;
 pub mod ui;
 
 use clap::Parser;

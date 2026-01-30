@@ -11,7 +11,7 @@ use std::path::PathBuf;
 // Import from the library crate
 use kanbanban::Args;
 use kanbanban::app::App;
-use kanbanban::events;
+use kanbanban::handler;
 use kanbanban::ui;
 
 fn main() -> Result<()> {
@@ -33,7 +33,12 @@ fn main() -> Result<()> {
             ui::draw(f, &mut app);
         })?;
 
-        events::handle_events(&mut app)?;
+        handler::handle_events(&mut app)?;
+
+        if app.should_redraw {
+            terminal.clear()?;
+            app.should_redraw = false;
+        }
 
         if app.should_quit {
             break;

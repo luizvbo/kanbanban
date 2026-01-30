@@ -14,10 +14,10 @@ pub struct Tag {
 impl Tag {
     // Helper to parse string to Color
     pub fn parse_color_string(s: &str) -> Color {
-        if s.starts_with('#') {
-            if let Ok(c) = Color::from_str(s) {
-                return c;
-            }
+        if s.starts_with('#')
+            && let Ok(c) = Color::from_str(s)
+        {
+            return c;
         }
         match s.to_lowercase().as_str() {
             "red" => Color::Red,
@@ -68,8 +68,8 @@ pub struct KanbanData {
     pub known_tags: Vec<Tag>,
 }
 
-impl KanbanData {
-    pub fn default() -> Self {
+impl Default for KanbanData {
+    fn default() -> Self {
         Self {
             known_tags: vec![
                 Tag {
@@ -91,7 +91,7 @@ impl KanbanData {
                             description:
                                 "Press `v` to view details.\nPress `o` to open in external editor."
                                     .into(),
-                            category: Some("General".into()), // Example
+                            category: Some("General".into()),
                             tags: vec![Tag {
                                 name: "Bug".into(),
                                 color: None,
@@ -113,6 +113,32 @@ impl KanbanData {
                 ],
             }],
         }
+    }
+}
+
+impl KanbanData {
+    pub fn current_project_mut(&mut self, index: usize) -> Option<&mut Project> {
+        self.projects.get_mut(index)
+    }
+
+    pub fn move_card(
+        &mut self,
+        project_idx: usize,
+        from_col: usize,
+        to_col: usize,
+        card_idx: usize,
+    ) -> Option<usize> {
+        let project = self.projects.get_mut(project_idx)?;
+
+        // Validation logic moved here
+        if from_col >= project.columns.len() || to_col >= project.columns.len() {
+            return None;
+        }
+
+        let card = project.columns[from_col].cards.remove(card_idx);
+        project.columns[to_col].cards.push(card);
+
+        Some(project.columns[to_col].cards.len() - 1) // Return new index
     }
 
     pub fn load(path: &PathBuf) -> Result<Self> {
@@ -147,10 +173,10 @@ impl KanbanData {
             return Tag::parse_color_string(c);
         }
         // 2. Check global known_tags
-        if let Some(global_tag) = self.known_tags.iter().find(|t| t.name == tag.name) {
-            if let Some(c) = &global_tag.color {
-                return Tag::parse_color_string(c);
-            }
+        if let Some(global_tag) = self.known_tags.iter().find(|t| t.name == tag.name)
+            && let Some(c) = &global_tag.color
+        {
+            return Tag::parse_color_string(c);
         }
         // 3. Fallback
         Color::White

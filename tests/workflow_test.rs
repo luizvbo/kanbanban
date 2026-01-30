@@ -1,6 +1,8 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-use kanbanban::app::{App, InputMode};
-use kanbanban::events::process_event;
+use kanbanban::{
+    app::{App, InputMode},
+    handler::process_event,
+};
 use tempfile::NamedTempFile;
 
 fn key(code: KeyCode) -> Event {
@@ -41,8 +43,10 @@ fn test_full_user_workflow() {
     process_event(&mut app, key(KeyCode::Char(' '))).unwrap();
     process_event(&mut app, key(KeyCode::Char('1'))).unwrap();
 
-    // Save
-    process_event(&mut app, key(KeyCode::Enter)).unwrap();
+    // Esc (Trigger Exit Modal) -> Enter (Confirm Save)
+    process_event(&mut app, key(KeyCode::Esc)).unwrap();
+    assert_eq!(app.mode, InputMode::ExitingModal); // Verify we got the modal
+    process_event(&mut app, key(KeyCode::Enter)).unwrap(); // Confirm "Yes"
 
     assert_eq!(app.mode, InputMode::Normal);
     assert_eq!(app.data.projects[0].columns[last_col_idx].cards.len(), 1);

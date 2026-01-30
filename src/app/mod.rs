@@ -1,7 +1,9 @@
-use crate::types::{Card, Column, KanbanData, Project, Tag};
+pub mod state;
+
+use crate::app::state::{CategorySelectorState, EditField, EditState, TagSelectorState};
+use crate::domain::kanban::{Column, KanbanData, Project, Tag};
 use anyhow::Result;
 use std::path::PathBuf;
-use std::process::Command; // For external editor
 use std::time::Instant;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -9,6 +11,7 @@ pub enum InputMode {
     Normal,
     Editing,
     TagSelection,
+    CategorySelection,
     Help,
     ExitingModal,
     DeleteConfirmation,
@@ -20,192 +23,32 @@ pub enum InputMode {
     Filter,
 }
 
-#[derive(PartialEq, Clone, Copy, Debug)]
-pub enum EditField {
-    Title,
-    Category,
-    Tags,
-    DueDate,
-    Description,
-}
-
-pub struct TagSelectorState {
-    pub available_tags: Vec<Tag>,
-    pub selected_indices: Vec<usize>,
-    pub current_index: usize,
-    pub search_query: String, // NEW: User input
-}
-
-pub struct EditState {
-    pub title: String,
-    pub category: String,
-    pub tags: Vec<Tag>,
-    pub due_date: String,
-    pub description: String,
-    pub focused_field: EditField,
-    pub is_new_card: bool,
-    pub cursor_position: usize,
-    pub scroll_x: u16,
-    pub scroll_y: u16,
-    pub description_edit_mode: bool,
-}
-
-impl EditState {
-    fn from_card(card: &Card) -> Self {
-        Self {
-            title: card.title.clone(),
-            category: card.category.clone().unwrap_or_default(), // NEW
-            tags: card.tags.clone(),
-            due_date: card.due_date.clone().unwrap_or_default(),
-            description: card.description.clone(),
-            focused_field: EditField::Title,
-            is_new_card: false,
-            cursor_position: card.title.len(),
-            scroll_x: 0,
-            scroll_y: 0,
-            description_edit_mode: false,
-        }
-    }
-
-    fn new() -> Self {
-        Self {
-            title: String::new(),
-            category: String::new(), // NEW
-            tags: Vec::new(),
-            due_date: String::new(),
-            description: String::new(),
-            focused_field: EditField::Title,
-            is_new_card: true,
-            cursor_position: 0,
-            scroll_x: 0,
-            scroll_y: 0,
-            description_edit_mode: false,
-        }
-    }
-
-    pub fn get_cursor_position_2d(&self, _width: u16) -> (u16, u16) {
-        let text = match self.focused_field {
-            EditField::Title => &self.title,
-            EditField::Category => &self.category,
-            EditField::Tags => return (0, 0),
-            EditField::DueDate => &self.due_date,
-            EditField::Description => &self.description,
-        };
-
-        if self.focused_field != EditField::Description {
-            return (self.cursor_position as u16, 0);
-        }
-
-        let mut x = 0;
-        let mut y = 0;
-
-        for (i, c) in text.char_indices() {
-            if i == self.cursor_position {
-                return (x, y);
-            }
-            if c == '\n' {
-                x = 0;
-                y += 1;
-            } else {
-                if c == '\t' {
-                    x += 4;
-                } else {
-                    x += 1;
-                }
-            }
-        }
-        (x, y)
-    }
-
-    pub fn move_cursor_up(&mut self) {
-        if self.focused_field != EditField::Description {
-            return;
-        }
-
-        let text = &self.description;
-        let pos = self.cursor_position;
-
-        // 1. Find start of current line
-        let current_line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
-
-        // 2. Calculate current column offset
-        let col_offset = pos - current_line_start;
-
-        if current_line_start == 0 {
-            // Already on first line, move to start
-            self.cursor_position = 0;
-            return;
-        }
-
-        // 3. Find start of previous line
-        let prev_line_end = current_line_start - 1;
-        let prev_line_start = text[..prev_line_end]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let prev_line_len = prev_line_end - prev_line_start;
-
-        // 4. Move to same column in previous line, clamping to length
-        let new_col = std::cmp::min(col_offset, prev_line_len);
-        self.cursor_position = prev_line_start + new_col;
-    }
-
-    // NEW: Move cursor visually down
-    pub fn move_cursor_down(&mut self) {
-        if self.focused_field != EditField::Description {
-            return;
-        }
-
-        let text = &self.description;
-        let pos = self.cursor_position;
-
-        // 1. Find start of current line
-        let current_line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let col_offset = pos - current_line_start;
-
-        // 2. Find end of current line (start of next)
-        let next_newline = text[pos..].find('\n').map(|i| pos + i);
-
-        if let Some(newline_idx) = next_newline {
-            let next_line_start = newline_idx + 1;
-            if next_line_start >= text.len() {
-                self.cursor_position = text.len();
-                return;
-            }
-
-            // 3. Find length of next line
-            let next_line_end = text[next_line_start..]
-                .find('\n')
-                .map(|i| next_line_start + i)
-                .unwrap_or(text.len());
-            let next_line_len = next_line_end - next_line_start;
-
-            // 4. Move to same column
-            let new_col = std::cmp::min(col_offset, next_line_len);
-            self.cursor_position = next_line_start + new_col;
-        } else {
-            // On last line, move to end
-            self.cursor_position = text.len();
-        }
-    }
-}
-
 pub struct App {
     pub data: KanbanData,
     pub filepath: PathBuf,
     pub should_quit: bool,
+
+    // UI State
     pub mode: InputMode,
     pub previous_mode: Option<InputMode>,
+    pub status_message: Option<String>,
+    pub status_time: Option<Instant>,
+    pub view_scroll_y: u16,
+    pub should_redraw: bool,
+
+    // Navigation State
     pub current_project_idx: usize,
     pub current_col_idx: usize,
     pub current_card_idx: usize,
+
+    // Sub-States
     pub edit_state: Option<EditState>,
     pub tag_selector_state: Option<TagSelectorState>,
-    pub status_message: Option<String>,
-    pub status_time: Option<Instant>,
+    pub category_selector_state: Option<CategorySelectorState>,
+
+    // Temporary Input Buffers
     pub prompt_input: String,
     pub filter_query: String,
-    pub view_scroll_y: u16,
 }
 
 impl App {
@@ -222,15 +65,53 @@ impl App {
             current_card_idx: 0,
             edit_state: None,
             tag_selector_state: None,
+            category_selector_state: None,
             status_message: None,
             status_time: None,
             prompt_input: String::new(),
-            filter_query: String::new(), // Init
-            view_scroll_y: 0,            // Init
+            filter_query: String::new(),
+            view_scroll_y: 0,
+            should_redraw: false,
         })
     }
 
+    // --- Helpers ---
+
+    pub fn current_project(&self) -> &Project {
+        &self.data.projects[self.current_project_idx]
+    }
+
+    pub fn current_project_mut(&mut self) -> &mut Project {
+        &mut self.data.projects[self.current_project_idx]
+    }
+
+    pub fn save_with_feedback(&mut self) {
+        match self.data.save(&self.filepath) {
+            Ok(_) => {
+                self.status_message = Some("Saved successfully".to_string());
+                self.status_time = Some(Instant::now());
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Error saving: {}", e));
+                self.status_time = Some(Instant::now());
+            }
+        }
+    }
+
+    pub fn quit(&mut self) {
+        self.should_quit = true;
+    }
+
+    pub fn toggle_help(&mut self) {
+        match self.mode {
+            InputMode::Normal => self.mode = InputMode::Help,
+            InputMode::Help => self.mode = InputMode::Normal,
+            _ => {}
+        }
+    }
+
     // --- Filter Logic ---
+
     pub fn start_filter(&mut self) {
         self.mode = InputMode::Filter;
     }
@@ -252,119 +133,27 @@ impl App {
         self.filter_query.pop();
     }
 
-    // Helper to check if a card matches the filter
-    pub fn card_matches_filter(&self, card: &Card) -> bool {
+    pub fn card_matches_filter(&self, card: &crate::domain::kanban::Card) -> bool {
         if self.filter_query.is_empty() {
             return true;
         }
         let q = self.filter_query.to_lowercase();
-
-        // Match Title
         if card.title.to_lowercase().contains(&q) {
             return true;
         }
-        // Match Category
-        if let Some(cat) = &card.category {
-            if cat.to_lowercase().contains(&q) {
-                return true;
-            }
+        if let Some(cat) = &card.category
+            && cat.to_lowercase().contains(&q)
+        {
+            return true;
         }
-        // Match Tags
         if card.tags.iter().any(|t| t.name.to_lowercase().contains(&q)) {
             return true;
         }
-
         false
     }
 
-    // --- Detail View Logic ---
-    pub fn open_detail_view(&mut self) {
-        let col = &self.current_project().columns[self.current_col_idx];
-        if !col.cards.is_empty() {
-            self.view_scroll_y = 0;
-            self.mode = InputMode::ViewCard;
-        }
-    }
-
-    pub fn close_detail_view(&mut self) {
-        self.mode = InputMode::Normal;
-    }
-
-    pub fn view_scroll_down(&mut self) {
-        self.view_scroll_y += 1;
-    }
-
-    pub fn view_scroll_up(&mut self) {
-        if self.view_scroll_y > 0 {
-            self.view_scroll_y -= 1;
-        }
-    }
-
-    // --- External Editor Logic ---
-    pub fn open_external_editor(&mut self) {
-        // Only allow if in Normal mode or View mode
-        if self.mode != InputMode::Normal && self.mode != InputMode::ViewCard {
-            return;
-        }
-
-        let col = &self.current_project().columns[self.current_col_idx];
-        if col.cards.is_empty() {
-            return;
-        }
-        let card = &col.cards[self.current_card_idx];
-
-        // 1. Create temp file
-        use std::io::Write;
-        let mut temp_file = std::env::temp_dir();
-        temp_file.push("kanbanban_edit.md");
-
-        if let Ok(mut file) = std::fs::File::create(&temp_file) {
-            let _ = file.write_all(card.description.as_bytes());
-        } else {
-            self.status_message = Some("Failed to create temp file".into());
-            self.status_time = Some(Instant::now());
-            return;
-        }
-
-        // 2. Open Editor
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-
-        // We need to suspend raw mode to let the editor take over
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
-
-        let status = Command::new(&editor).arg(&temp_file).status();
-
-        // Restore raw mode
-        let _ = crossterm::terminal::enable_raw_mode();
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
-
-        // 3. Read back
-        if status.map(|s| s.success()).unwrap_or(false) {
-            if let Ok(content) = std::fs::read_to_string(&temp_file) {
-                let idx = self.current_card_idx;
-                let col_idx = self.current_col_idx;
-                self.current_project_mut().columns[col_idx].cards[idx].description = content;
-                self.save_with_feedback();
-            }
-        }
-
-        // Cleanup
-        let _ = std::fs::remove_file(temp_file);
-
-        // Force redraw
-        // (Handled by main loop)
-    }
-
-    pub fn current_project(&self) -> &Project {
-        &self.data.projects[self.current_project_idx]
-    }
-
-    pub fn current_project_mut(&mut self) -> &mut Project {
-        &mut self.data.projects[self.current_project_idx]
-    }
-
     // --- Navigation ---
+
     pub fn next_column(&mut self) {
         let len = self.current_project().columns.len();
         if len > 0 {
@@ -387,10 +176,8 @@ impl App {
 
     pub fn next_card(&mut self) {
         let col = &self.current_project().columns[self.current_col_idx];
-        if !col.cards.is_empty() {
-            if self.current_card_idx + 1 < col.cards.len() {
-                self.current_card_idx += 1;
-            }
+        if !col.cards.is_empty() && self.current_card_idx + 1 < col.cards.len() {
+            self.current_card_idx += 1;
         }
     }
 
@@ -409,21 +196,215 @@ impl App {
         }
     }
 
-    // 1. Rename Project
-    pub fn start_rename_project(&mut self) {
-        self.prompt_input = self.current_project().name.clone();
-        self.mode = InputMode::ProjectRename;
+    // --- Detail View ---
+
+    pub fn open_detail_view(&mut self) {
+        let col = &self.current_project().columns[self.current_col_idx];
+        if !col.cards.is_empty() {
+            self.view_scroll_y = 0;
+            self.mode = InputMode::ViewCard;
+        }
     }
 
-    pub fn confirm_rename_project(&mut self) {
+    pub fn close_detail_view(&mut self) {
+        self.mode = InputMode::Normal;
+    }
+
+    pub fn view_scroll_down(&mut self) {
+        self.view_scroll_y += 1;
+    }
+
+    pub fn view_scroll_up(&mut self) {
+        if self.view_scroll_y > 0 {
+            self.view_scroll_y -= 1;
+        }
+    }
+
+    // --- External Editor ---
+
+    pub fn open_external_editor(&mut self) {
+        // Guard: Only allow if Description is focused
+        if self.mode == InputMode::Editing {
+            if let Some(state) = &self.edit_state
+                && state.focused_field != EditField::Description
+            {
+                self.status_message = Some("Focus Description to open editor".to_string());
+                self.status_time = Some(Instant::now());
+                return;
+            }
+        } else if self.mode != InputMode::ViewCard {
+            return;
+        }
+
+        let initial_content = if self.mode == InputMode::Editing {
+            self.edit_state
+                .as_ref()
+                .map(|s| s.description.clone())
+                .unwrap_or_default()
+        } else {
+            let col = &self.current_project().columns[self.current_col_idx];
+            if col.cards.is_empty() {
+                return;
+            }
+            col.cards[self.current_card_idx].description.clone()
+        };
+
+        use std::io::Write;
+        let mut temp_file = std::env::temp_dir();
+        temp_file.push("kanbanban_edit.md");
+
+        if let Ok(mut file) = std::fs::File::create(&temp_file) {
+            let _ = file.write_all(initial_content.as_bytes());
+        } else {
+            self.status_message = Some("Failed to create temp file".into());
+            self.status_time = Some(Instant::now());
+            return;
+        }
+
+        #[cfg(not(test))]
+        {
+            use crossterm::{
+                cursor, execute,
+                terminal::{EnterAlternateScreen, LeaveAlternateScreen},
+            };
+            use std::process::Command;
+
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            let _ = crossterm::terminal::disable_raw_mode();
+            let _ = execute!(std::io::stdout(), LeaveAlternateScreen, cursor::Show);
+            let _ = Command::new(&editor).arg(&temp_file).status();
+            let _ = execute!(std::io::stdout(), EnterAlternateScreen, cursor::Hide);
+            let _ = crossterm::terminal::enable_raw_mode();
+
+            // Signal main loop to clear artifacts
+            self.should_redraw = true;
+        }
+
+        #[cfg(test)]
+        {
+            use std::fs::OpenOptions;
+            if let Ok(mut file) = OpenOptions::new().append(true).open(&temp_file) {
+                let _ = writeln!(file, "\n[Edited Externally]");
+            }
+        }
+
+        // Reload content
+        if let Ok(content) = std::fs::read_to_string(&temp_file) {
+            if self.mode == InputMode::Editing {
+                if let Some(state) = &mut self.edit_state {
+                    state.description = content;
+                    state.cursor_position = state.description.len();
+                }
+            } else {
+                let idx = self.current_card_idx;
+                let col_idx = self.current_col_idx;
+                self.current_project_mut().columns[col_idx].cards[idx].description = content;
+                self.save_with_feedback();
+            }
+        }
+        let _ = std::fs::remove_file(temp_file);
+    }
+
+    // --- Category Operations ---
+    pub fn open_category_selector(&mut self) {
+        if let Some(state) = &self.edit_state {
+            // Collect all unique categories from the current project
+            let mut categories: Vec<String> = self
+                .current_project()
+                .columns
+                .iter()
+                .flat_map(|c| c.cards.iter())
+                .filter_map(|c| c.category.clone())
+                .collect();
+            categories.sort();
+            categories.dedup();
+
+            self.category_selector_state =
+                Some(CategorySelectorState::new(categories, &state.category));
+            self.mode = InputMode::CategorySelection;
+        }
+    }
+
+    pub fn close_category_selector(&mut self) {
+        self.category_selector_state = None;
+        self.mode = InputMode::Editing;
+    }
+
+    pub fn category_selector_confirm(&mut self) {
+        if let Some(selector) = &self.category_selector_state
+            && let Some(edit_state) = &mut self.edit_state
+        {
+            // If we have a selection, use it.
+            // If search query is not empty and no selection, use search query (new category)
+            let filtered = selector.get_filtered_categories();
+            if let Some(cat) = filtered.get(selector.current_index) {
+                edit_state.category = cat.clone();
+            } else if !selector.search_query.is_empty() {
+                edit_state.category = selector.search_query.clone();
+            }
+        }
+        self.close_category_selector();
+    }
+
+    pub fn category_selector_input_char(&mut self, c: char) {
+        if let Some(selector) = &mut self.category_selector_state {
+            selector.search_query.push(c);
+            selector.current_index = 0;
+        }
+    }
+
+    pub fn category_selector_backspace(&mut self) {
+        if let Some(selector) = &mut self.category_selector_state {
+            selector.search_query.pop();
+            selector.current_index = 0;
+        }
+    }
+
+    pub fn category_selector_next(&mut self) {
+        if let Some(selector) = &mut self.category_selector_state {
+            let count = selector.get_filtered_categories().len();
+            // Allow going one past end to select "Create New" if query exists
+            let limit = if !selector.search_query.is_empty() {
+                count
+            } else {
+                count.saturating_sub(1)
+            };
+            if selector.current_index < limit {
+                selector.current_index += 1;
+            }
+        }
+    }
+
+    pub fn category_selector_prev(&mut self) {
+        if let Some(selector) = &mut self.category_selector_state
+            && selector.current_index > 0
+        {
+            selector.current_index -= 1;
+        }
+    }
+
+    // --- Column Operations ---
+
+    pub fn start_new_column(&mut self) {
+        self.prompt_input = String::new();
+        self.mode = InputMode::ColumnNew;
+    }
+
+    pub fn confirm_new_column(&mut self) {
         if !self.prompt_input.trim().is_empty() {
-            self.current_project_mut().name = self.prompt_input.clone();
+            let new_col = Column {
+                title: self.prompt_input.clone(),
+                cards: Vec::new(),
+                scroll_offset: 0,
+            };
+            self.current_project_mut().columns.push(new_col);
+            self.current_col_idx = self.current_project().columns.len() - 1;
+            self.current_card_idx = 0;
             self.save_with_feedback();
         }
         self.mode = InputMode::Normal;
     }
 
-    // 2. Rename Column
     pub fn start_rename_column(&mut self) {
         if self.current_project().columns.is_empty() {
             return;
@@ -436,7 +417,6 @@ impl App {
 
     pub fn confirm_rename_column(&mut self) {
         if !self.prompt_input.trim().is_empty() {
-            // FIX: Capture index to avoid E0503
             let idx = self.current_col_idx;
             self.current_project_mut().columns[idx].title = self.prompt_input.clone();
             self.save_with_feedback();
@@ -444,28 +424,6 @@ impl App {
         self.mode = InputMode::Normal;
     }
 
-    // 3. New Column
-    pub fn start_new_column(&mut self) {
-        self.prompt_input = String::new();
-        self.mode = InputMode::ColumnNew;
-    }
-
-    pub fn confirm_new_column(&mut self) {
-        if !self.prompt_input.trim().is_empty() {
-            let new_col = Column {
-                title: self.prompt_input.clone(),
-                cards: Vec::new(),
-                scroll_offset: 0, // Initialize scroll
-            };
-            self.current_project_mut().columns.push(new_col);
-            self.current_col_idx = self.current_project().columns.len() - 1;
-            self.current_card_idx = 0;
-            self.save_with_feedback();
-        }
-        self.mode = InputMode::Normal;
-    }
-
-    // 4. Delete Column
     pub fn trigger_delete_column(&mut self) {
         if self.current_project().columns.is_empty() {
             return;
@@ -474,13 +432,11 @@ impl App {
     }
 
     pub fn confirm_delete_column(&mut self) {
-        // FIX: Capture index to avoid E0503
         let idx = self.current_col_idx;
         let project = self.current_project_mut();
 
         if !project.columns.is_empty() {
             project.columns.remove(idx);
-
             if idx >= project.columns.len() {
                 if project.columns.is_empty() {
                     self.current_col_idx = 0;
@@ -496,20 +452,6 @@ impl App {
         self.mode = InputMode::Normal;
     }
 
-    // --- Prompt Input Helpers ---
-    pub fn prompt_input_char(&mut self, c: char) {
-        self.prompt_input.push(c);
-    }
-
-    pub fn prompt_input_backspace(&mut self) {
-        self.prompt_input.pop();
-    }
-
-    pub fn cancel_prompt(&mut self) {
-        self.mode = InputMode::Normal;
-    }
-
-    // --- Column Reordering ---
     pub fn move_column_left(&mut self) {
         let idx = self.current_col_idx;
         if idx > 0 {
@@ -530,7 +472,23 @@ impl App {
         }
     }
 
-    // --- Card Movement (Vertical) ---
+    // --- Project Operations ---
+
+    pub fn start_rename_project(&mut self) {
+        self.prompt_input = self.current_project().name.clone();
+        self.mode = InputMode::ProjectRename;
+    }
+
+    pub fn confirm_rename_project(&mut self) {
+        if !self.prompt_input.trim().is_empty() {
+            self.current_project_mut().name = self.prompt_input.clone();
+            self.save_with_feedback();
+        }
+        self.mode = InputMode::Normal;
+    }
+
+    // --- Card Movement ---
+
     pub fn move_card_up(&mut self) {
         let col_idx = self.current_col_idx;
         let card_idx = self.current_card_idx;
@@ -557,7 +515,6 @@ impl App {
         }
     }
 
-    // --- Card Movement (Horizontal) ---
     pub fn move_card_left(&mut self) {
         let current_col_idx = self.current_col_idx;
         if current_col_idx == 0 {
@@ -598,7 +555,8 @@ impl App {
         self.save_with_feedback();
     }
 
-    // --- Actions ---
+    // --- Card Deletion ---
+
     pub fn trigger_delete(&mut self) {
         let col = &self.current_project().columns[self.current_col_idx];
         if !col.cards.is_empty() {
@@ -606,18 +564,7 @@ impl App {
         }
     }
 
-    // NEW: Confirm Delete
     pub fn confirm_delete(&mut self) {
-        self.delete_current_card();
-        self.mode = InputMode::Normal;
-    }
-
-    // NEW: Cancel Delete
-    pub fn cancel_delete(&mut self) {
-        self.mode = InputMode::Normal;
-    }
-
-    pub fn delete_current_card(&mut self) {
         let col_idx = self.current_col_idx;
         let card_idx = self.current_card_idx;
         let project = self.current_project_mut();
@@ -628,72 +575,18 @@ impl App {
             self.clamp_card_selection();
             self.save_with_feedback();
         }
-    }
-
-    pub fn toggle_help(&mut self) {
-        match self.mode {
-            InputMode::Normal => self.mode = InputMode::Help,
-            InputMode::Help => self.mode = InputMode::Normal,
-            _ => {}
-        }
-    }
-
-    pub fn quit(&mut self) {
-        self.should_quit = true;
-    }
-
-    pub fn save_with_feedback(&mut self) {
-        match self.data.save(&self.filepath) {
-            Ok(_) => {
-                self.status_message = Some("Saved successfully".to_string());
-                self.status_time = Some(Instant::now());
-            }
-            Err(e) => {
-                self.status_message = Some(format!("Error saving: {}", e));
-                self.status_time = Some(Instant::now());
-            }
-        }
-    }
-
-    // --- Modal Logic ---
-    pub fn trigger_exit_modal(&mut self) {
-        self.previous_mode = Some(self.mode);
-        self.mode = InputMode::ExitingModal;
-    }
-
-    pub fn confirm_exit_save(&mut self) {
-        self.save_edit();
-        self.previous_mode = None;
-    }
-
-    pub fn confirm_exit_discard(&mut self) {
-        self.edit_state = None;
         self.mode = InputMode::Normal;
-        self.previous_mode = None;
     }
 
-    pub fn cancel_exit_modal(&mut self) {
-        if let Some(prev) = self.previous_mode {
-            self.mode = prev;
-        } else {
-            self.mode = InputMode::Normal;
-        }
-        self.previous_mode = None;
+    pub fn delete_current_card(&mut self) {
+        self.confirm_delete();
     }
 
-    // --- Editing Logic ---
-    pub fn is_edit_empty(&self) -> bool {
-        if let Some(state) = &self.edit_state {
-            return state.title.trim().is_empty()
-                && state.description.trim().is_empty()
-                && state.tags.is_empty();
-        }
-        true
+    pub fn cancel_delete(&mut self) {
+        self.mode = InputMode::Normal;
     }
 
-    pub fn get_focused_field(&self) -> Option<EditField> {
-        self.edit_state.as_ref().map(|s| s.focused_field)
-    }
+    // --- Editing (Delegates to EditState) ---
 
     pub fn start_new_card(&mut self) {
         self.edit_state = Some(EditState::new());
@@ -719,29 +612,14 @@ impl App {
 
     pub fn save_edit(&mut self) {
         if let Some(state) = self.edit_state.take() {
-            let new_card = Card {
-                title: if state.title.is_empty() {
-                    "Untitled".into()
-                } else {
-                    state.title.clone()
-                },
-                category: if state.category.is_empty() {
-                    None
-                } else {
-                    Some(state.category.clone())
-                },
-                description: state.description.clone(),
-                tags: state.tags,
-                due_date: if state.due_date.is_empty() {
-                    None
-                } else {
-                    Some(state.due_date.clone())
-                },
-            };
+            // 1. Capture the values we need from state BEFORE consuming it
+            let is_new = state.is_new_card;
+
+            // 2. Consume the state to create the card
+            let new_card = state.into_card();
 
             let col_idx = self.current_col_idx;
             let card_idx = self.current_card_idx;
-            let is_new = state.is_new_card;
 
             {
                 let project = self.current_project_mut();
@@ -764,12 +642,21 @@ impl App {
         self.mode = InputMode::Normal;
     }
 
-    // --- Cursor & Text Editing ---
+    pub fn is_edit_empty(&self) -> bool {
+        self.edit_state.as_ref().is_none_or(|s| s.is_empty())
+    }
+
+    pub fn get_focused_field(&self) -> Option<EditField> {
+        self.edit_state.as_ref().map(|s| s.focused_field)
+    }
+
+    // --- Delegation to EditState ---
+
     pub fn toggle_description_edit(&mut self) {
-        if let Some(state) = &mut self.edit_state {
-            if state.focused_field == EditField::Description {
-                state.description_edit_mode = !state.description_edit_mode;
-            }
+        if let Some(state) = &mut self.edit_state
+            && state.focused_field == EditField::Description
+        {
+            state.description_edit_mode = !state.description_edit_mode;
         }
     }
 
@@ -781,14 +668,12 @@ impl App {
 
             let text = match state.focused_field {
                 EditField::Title => &mut state.title,
-                EditField::Category => &mut state.category, // NEW
+                EditField::Category => &mut state.category,
                 EditField::Tags => return,
                 EditField::DueDate => &mut state.due_date,
                 EditField::Description => &mut state.description,
             };
 
-            // FIX: Normalize Carriage Return (\r) to Newline (\n)
-            // This prevents visual desync where cursor moves but text doesn't wrap.
             let char_to_insert = if c == '\r' { '\n' } else { c };
 
             if state.cursor_position >= text.len() {
@@ -796,17 +681,13 @@ impl App {
             } else {
                 text.insert(state.cursor_position, char_to_insert);
             }
-
-            // Increment by the actual length of the inserted char
             state.cursor_position += char_to_insert.len_utf8();
         }
     }
 
-    // NEW: Handle Tab key specifically
     pub fn edit_input_tab(&mut self) {
         if let Some(state) = &mut self.edit_state {
-            if state.focused_field == EditField::Description {
-                // Insert 2 spaces for Markdown indentation
+            if state.focused_field == EditField::Description && state.description_edit_mode {
                 let text = &mut state.description;
                 if state.cursor_position >= text.len() {
                     text.push_str("  ");
@@ -815,7 +696,6 @@ impl App {
                 }
                 state.cursor_position += 2;
             } else {
-                // For other fields, Tab cycles to next field
                 self.cycle_edit_field(false);
             }
         }
@@ -823,23 +703,22 @@ impl App {
 
     pub fn edit_input_backspace(&mut self) {
         if let Some(state) = &mut self.edit_state {
-            // FIX: Prevent backspace in Description if not in edit mode
             if state.focused_field == EditField::Description && !state.description_edit_mode {
                 return;
             }
 
             let text = match state.focused_field {
                 EditField::Title => &mut state.title,
-                EditField::Category => &mut state.category, // FIX
+                EditField::Category => &mut state.category,
                 EditField::Tags => return,
                 EditField::DueDate => &mut state.due_date,
                 EditField::Description => &mut state.description,
             };
 
             if state.cursor_position > 0 && !text.is_empty() {
-                let mut char_indices = text.char_indices();
+                let char_indices = text.char_indices();
                 let mut prev_idx = 0;
-                while let Some((idx, _)) = char_indices.next() {
+                for (idx, _) in char_indices {
                     if idx >= state.cursor_position {
                         break;
                     }
@@ -848,6 +727,44 @@ impl App {
                 text.remove(prev_idx);
                 state.cursor_position = prev_idx;
             }
+        }
+    }
+
+    pub fn cycle_edit_field(&mut self, reverse: bool) {
+        if let Some(state) = &mut self.edit_state {
+            if state.focused_field == EditField::Description && state.description_edit_mode {
+                return;
+            }
+
+            state.focused_field = if reverse {
+                match state.focused_field {
+                    EditField::Title => EditField::Description,
+                    EditField::Category => EditField::Title,
+                    EditField::Tags => EditField::Category,
+                    EditField::DueDate => EditField::Tags,
+                    EditField::Description => EditField::DueDate,
+                }
+            } else {
+                match state.focused_field {
+                    EditField::Title => EditField::Category,
+                    EditField::Category => EditField::Tags,
+                    EditField::Tags => EditField::DueDate,
+                    EditField::DueDate => EditField::Description,
+                    EditField::Description => EditField::Title,
+                }
+            };
+
+            let text_len = match state.focused_field {
+                EditField::Title => state.title.len(),
+                EditField::Category => state.category.len(),
+                EditField::Tags => 0,
+                EditField::DueDate => state.due_date.len(),
+                EditField::Description => state.description.len(),
+            };
+            state.cursor_position = text_len;
+            state.scroll_x = 0;
+            state.scroll_y = 0;
+            state.description_edit_mode = false;
         }
     }
 
@@ -864,27 +781,26 @@ impl App {
     }
 
     pub fn move_cursor_left(&mut self) {
-        if let Some(state) = &mut self.edit_state {
-            if state.cursor_position > 0 {
-                let text = match state.focused_field {
-                    EditField::Title => &state.title,
-                    EditField::Category => &state.category, // FIX
-                    EditField::Tags => "",
-                    EditField::DueDate => &state.due_date,
-                    EditField::Description => &state.description,
-                };
+        if let Some(state) = &mut self.edit_state
+            && state.cursor_position > 0
+        {
+            let text = match state.focused_field {
+                EditField::Title => &state.title,
+                EditField::Category => &state.category,
+                EditField::Tags => "",
+                EditField::DueDate => &state.due_date,
+                EditField::Description => &state.description,
+            };
 
-                // Move back by one char boundary
-                let mut char_indices = text.char_indices();
-                let mut prev_idx = 0;
-                while let Some((idx, _)) = char_indices.next() {
-                    if idx >= state.cursor_position {
-                        break;
-                    }
-                    prev_idx = idx;
+            let char_indices = text.char_indices();
+            let mut prev_idx = 0;
+            for (idx, _) in char_indices {
+                if idx >= state.cursor_position {
+                    break;
                 }
-                state.cursor_position = prev_idx;
+                prev_idx = idx;
             }
+            state.cursor_position = prev_idx;
         }
     }
 
@@ -892,18 +808,16 @@ impl App {
         if let Some(state) = &mut self.edit_state {
             let text = match state.focused_field {
                 EditField::Title => &state.title,
-                EditField::Category => &state.category, // FIX
+                EditField::Category => &state.category,
                 EditField::Tags => "",
                 EditField::DueDate => &state.due_date,
                 EditField::Description => &state.description,
             };
 
-            // Move forward by one char boundary
             if let Some((idx, _)) = text
                 .char_indices()
                 .find(|(i, _)| *i == state.cursor_position)
             {
-                // Find next char
                 let mut iter = text.char_indices();
                 while let Some((i, _)) = iter.next() {
                     if i == idx {
@@ -916,7 +830,6 @@ impl App {
                     }
                 }
             } else if state.cursor_position < text.len() {
-                // Fallback
                 state.cursor_position += 1;
             }
         }
@@ -924,7 +837,6 @@ impl App {
 
     pub fn move_cursor_home(&mut self) {
         if let Some(state) = &mut self.edit_state {
-            // If in description, move to start of LINE, not start of text
             if state.focused_field == EditField::Description {
                 let text = &state.description;
                 let last_newline = text[..state.cursor_position]
@@ -942,14 +854,13 @@ impl App {
         if let Some(state) = &mut self.edit_state {
             let text = match state.focused_field {
                 EditField::Title => &state.title,
-                EditField::Category => &state.category, // FIX
+                EditField::Category => &state.category,
                 EditField::Tags => "",
                 EditField::DueDate => &state.due_date,
                 EditField::Description => &state.description,
             };
 
             if state.focused_field == EditField::Description {
-                // Move to end of LINE
                 let next_newline = text[state.cursor_position..]
                     .find('\n')
                     .map(|i| state.cursor_position + i)
@@ -961,73 +872,84 @@ impl App {
         }
     }
 
-    pub fn cycle_edit_field(&mut self, reverse: bool) {
-        if let Some(state) = &mut self.edit_state {
-            if state.focused_field == EditField::Description && state.description_edit_mode {
-                return;
-            }
+    // --- Modal Logic ---
 
-            // Updated Cycle Order
-            state.focused_field = if reverse {
-                match state.focused_field {
-                    EditField::Title => EditField::Description,
-                    EditField::Category => EditField::Title, // FIX
-                    EditField::Tags => EditField::Category,  // FIX
-                    EditField::DueDate => EditField::Tags,
-                    EditField::Description => EditField::DueDate,
-                }
-            } else {
-                match state.focused_field {
-                    EditField::Title => EditField::Category, // FIX
-                    EditField::Category => EditField::Tags,  // FIX
-                    EditField::Tags => EditField::DueDate,
-                    EditField::DueDate => EditField::Description,
-                    EditField::Description => EditField::Title,
-                }
-            };
+    pub fn trigger_exit_modal(&mut self) {
+        self.previous_mode = Some(self.mode);
+        self.mode = InputMode::ExitingModal;
+    }
 
-            let text_len = match state.focused_field {
-                EditField::Title => state.title.len(),
-                EditField::Category => state.category.len(), // FIX
-                EditField::Tags => 0,
-                EditField::DueDate => state.due_date.len(),
-                EditField::Description => state.description.len(),
-            };
-            state.cursor_position = text_len;
-            state.scroll_x = 0;
-            state.scroll_y = 0;
-            state.description_edit_mode = false;
+    pub fn confirm_exit_save(&mut self) {
+        self.save_edit();
+        self.previous_mode = None;
+    }
+
+    pub fn confirm_exit_discard(&mut self) {
+        self.edit_state = None;
+        self.mode = InputMode::Normal;
+        self.previous_mode = None;
+    }
+
+    pub fn cancel_exit_modal(&mut self) {
+        if let Some(prev) = self.previous_mode {
+            self.mode = prev;
+        } else {
+            self.mode = InputMode::Normal;
+        }
+        self.previous_mode = None;
+    }
+
+    // --- Prompt Input Helpers ---
+
+    pub fn prompt_input_char(&mut self, c: char) {
+        self.prompt_input.push(c);
+    }
+
+    pub fn prompt_input_backspace(&mut self) {
+        self.prompt_input.pop();
+    }
+
+    pub fn cancel_prompt(&mut self) {
+        self.mode = InputMode::Normal;
+    }
+
+    // --- Tag Selector (Delegates to TagSelectorState) ---
+
+    pub fn open_tag_selector(&mut self) {
+        if let Some(state) = &self.edit_state {
+            self.tag_selector_state = Some(TagSelectorState::new(
+                self.data.known_tags.clone(),
+                &state.tags,
+            ));
+            self.mode = InputMode::TagSelection;
         }
     }
 
-    // --- Tag Selector Logic ---
-    pub fn open_tag_selector(&mut self) {
-        if let Some(state) = &self.edit_state {
-            // 1. Load tags from global data
-            let available_tags = self.data.known_tags.clone();
+    pub fn close_tag_selector(&mut self) {
+        self.tag_selector_state = None;
+        self.mode = InputMode::Editing;
+    }
 
-            // 2. Determine which are currently selected
-            let mut selected_indices = Vec::new();
-            for (i, avail) in available_tags.iter().enumerate() {
-                if state.tags.iter().any(|t| t.name == avail.name) {
-                    selected_indices.push(i);
-                }
-            }
+    pub fn tag_selector_confirm(&mut self) {
+        if let Some(selector) = &self.tag_selector_state
+            && let Some(edit_state) = &mut self.edit_state
+        {
+            edit_state.tags = selector.get_selected_tags();
+        }
+        self.close_tag_selector();
+    }
 
-            self.tag_selector_state = Some(TagSelectorState {
-                available_tags,
-                selected_indices,
-                current_index: 0,
-                search_query: String::new(),
-            });
-            self.mode = InputMode::TagSelection;
+    pub fn get_filtered_tags(&self) -> Vec<(usize, Tag)> {
+        if let Some(selector) = &self.tag_selector_state {
+            selector.get_filtered_tags()
+        } else {
+            Vec::new()
         }
     }
 
     pub fn tag_selector_input_char(&mut self, c: char) {
         if let Some(selector) = &mut self.tag_selector_state {
             selector.search_query.push(c);
-            // Reset selection when searching to avoid out of bounds
             selector.current_index = 0;
         }
     }
@@ -1039,31 +961,9 @@ impl App {
         }
     }
 
-    pub fn get_filtered_tags(&self) -> Vec<(usize, Tag)> {
-        if let Some(selector) = &self.tag_selector_state {
-            let query = selector.search_query.to_lowercase();
-            selector
-                .available_tags
-                .iter()
-                .enumerate()
-                .filter(|(_, tag)| tag.name.to_lowercase().contains(&query))
-                .map(|(i, tag)| (i, tag.clone()))
-                .collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub fn close_tag_selector(&mut self) {
-        self.tag_selector_state = None;
-        self.mode = InputMode::Editing;
-    }
-
     pub fn tag_selector_next(&mut self) {
         let filtered_len = self.get_filtered_tags().len();
         if let Some(selector) = &mut self.tag_selector_state {
-            // If we are at the end of the list, and there is a search query,
-            // allow going one step further to the "Create New" button (represented by len)
             let limit = if !selector.search_query.is_empty() {
                 filtered_len
             } else {
@@ -1077,92 +977,64 @@ impl App {
     }
 
     pub fn tag_selector_prev(&mut self) {
-        if let Some(selector) = &mut self.tag_selector_state {
-            if selector.current_index > 0 {
-                selector.current_index -= 1;
-            }
+        if let Some(selector) = &mut self.tag_selector_state
+            && selector.current_index > 0
+        {
+            selector.current_index -= 1;
         }
     }
 
     pub fn tag_selector_toggle_or_create(&mut self) {
         let filtered = self.get_filtered_tags();
 
-        if let Some(selector) = &mut self.tag_selector_state {
-            if !selector.search_query.is_empty() && selector.current_index == filtered.len() {
-                // CREATE NEW TAG (Global)
-                let new_name = selector.search_query.clone();
-                let colors = ["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"];
-                let color_choice = colors[self.data.known_tags.len() % colors.len()];
+        if let Some(selector) = &mut self.tag_selector_state
+            && !selector.search_query.is_empty()
+            && selector.current_index == filtered.len()
+        {
+            // CREATE NEW TAG
+            let new_name = selector.search_query.clone();
+            let colors = ["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"];
+            let color_choice = colors[self.data.known_tags.len() % colors.len()];
 
-                let new_tag = Tag {
-                    name: new_name,
-                    color: Some(color_choice.to_string()), // Global has color
-                };
+            let new_tag = Tag {
+                name: new_name,
+                color: Some(color_choice.to_string()),
+            };
 
-                self.data.known_tags.push(new_tag.clone());
+            self.data.known_tags.push(new_tag.clone());
 
-                let new_idx = self.data.known_tags.len() - 1;
-                selector.selected_indices.push(new_idx);
+            let new_idx = self.data.known_tags.len() - 1;
+            selector.selected_indices.push(new_idx);
 
-                selector.search_query.clear();
-                selector.available_tags = self.data.known_tags.clone();
-                selector.current_index = 0;
-                return;
-            }
+            selector.search_query.clear();
+            selector.available_tags = self.data.known_tags.clone();
+            selector.current_index = 0;
+            return;
         }
 
         // Toggle logic
         if let Some((real_idx, _)) =
             filtered.get(self.tag_selector_state.as_ref().unwrap().current_index)
+            && let Some(selector) = &mut self.tag_selector_state
         {
-            if let Some(selector) = &mut self.tag_selector_state {
-                if let Some(pos) = selector
-                    .selected_indices
-                    .iter()
-                    .position(|&x| x == *real_idx)
-                {
-                    selector.selected_indices.remove(pos);
-                } else {
-                    selector.selected_indices.push(*real_idx);
-                }
-            }
-        }
-    }
-
-    pub fn tag_selector_toggle(&mut self) {
-        if let Some(selector) = &mut self.tag_selector_state {
-            let idx = selector.current_index;
-            if let Some(pos) = selector.selected_indices.iter().position(|&x| x == idx) {
+            if let Some(pos) = selector
+                .selected_indices
+                .iter()
+                .position(|&x| x == *real_idx)
+            {
                 selector.selected_indices.remove(pos);
             } else {
-                selector.selected_indices.push(idx);
+                selector.selected_indices.push(*real_idx);
             }
         }
-    }
-
-    pub fn tag_selector_confirm(&mut self) {
-        if let Some(selector) = &self.tag_selector_state {
-            if let Some(edit_state) = &mut self.edit_state {
-                edit_state.tags.clear();
-                for &idx in &selector.selected_indices {
-                    if let Some(tag) = selector.available_tags.get(idx) {
-                        // FIX: Add tag to card with color=None to use global default
-                        edit_state.tags.push(Tag {
-                            name: tag.name.clone(),
-                            color: None,
-                        });
-                    }
-                }
-            }
-        }
-        self.close_tag_selector();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::domain::kanban::Card;
+
     use super::*;
-    use crate::types::Column;
 
     // Helper to create a test app in memory
     fn create_test_app() -> App {
@@ -1180,6 +1052,39 @@ mod tests {
             scroll_offset: 0,
         });
         app
+    }
+
+    #[test]
+    fn test_external_editor_integration() {
+        let mut app = create_test_app();
+        // Add card to Col 1 (index 0)
+        app.data.projects[0].columns[0].cards.push(Card {
+            title: "T".into(),
+            description: "Old".into(),
+            category: None,
+            tags: vec![],
+            due_date: None,
+        });
+
+        // Select the card
+        app.current_col_idx = 0;
+        app.current_card_idx = 0;
+
+        app.start_edit_card();
+
+        // Focus description
+        app.edit_state.as_mut().unwrap().focused_field = EditField::Description;
+
+        // Trigger editor
+        app.open_external_editor();
+
+        // Check if content was updated
+        assert!(
+            app.edit_state
+                .unwrap()
+                .description
+                .contains("[Edited Externally]")
+        );
     }
 
     #[test]
@@ -1539,37 +1444,37 @@ mod tests {
     fn test_cursor_movement_all_fields() {
         let mut app = create_test_app();
         app.start_new_card();
-        
+
         // Helper to test a specific field
         fn test_field(app: &mut App, field: EditField) {
             app.edit_state.as_mut().unwrap().focused_field = field;
             app.edit_state.as_mut().unwrap().cursor_position = 0;
-            
+
             // FIX: Enable edit mode for description, otherwise input is ignored by edit_input_char
             if field == EditField::Description {
                 app.edit_state.as_mut().unwrap().description_edit_mode = true;
             }
-            
+
             // Type 'A'
             app.edit_input_char('A');
             assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 1);
-            
+
             // Move Left
             app.move_cursor_left();
             assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 0);
-            
+
             // Move Right
             app.move_cursor_right();
             assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 1);
-            
+
             // Move Home
             app.move_cursor_home();
             assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 0);
-            
+
             // Move End
             app.move_cursor_end();
             assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 1);
-            
+
             // Backspace
             app.edit_input_backspace();
             assert_eq!(app.edit_state.as_ref().unwrap().cursor_position, 0);
@@ -1579,7 +1484,7 @@ mod tests {
         test_field(&mut app, EditField::Title);
         test_field(&mut app, EditField::Category);
         test_field(&mut app, EditField::DueDate);
-        
+
         // Description is special (multiline)
         test_field(&mut app, EditField::Description);
     }
