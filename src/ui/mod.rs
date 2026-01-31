@@ -105,6 +105,21 @@ mod tests {
         app
     }
 
+    // Helper to search buffer for string
+    fn buffer_contains(buffer: &ratatui::buffer::Buffer, s: &str) -> bool {
+        for y in 0..buffer.area.height {
+            let line_width = buffer.area.width;
+            let mut line_string = String::new();
+            for x in 0..line_width {
+                line_string.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            if line_string.contains(s) {
+                return true;
+            }
+        }
+        false
+    }
+
     #[test]
     fn test_draw_main_board() {
         let backend = TestBackend::new(100, 20);
@@ -115,8 +130,8 @@ mod tests {
 
         let buffer = terminal.backend().buffer();
 
-        // Assert Title
-        assert!(buffer_contains(buffer, "Kanban TUI"));
+        // Assert Title (Updated to match new header)
+        assert!(buffer_contains(buffer, "KANBANBAN"));
         assert!(buffer_contains(buffer, "Project: Test Project"));
 
         // Assert Column
@@ -129,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_draw_help_popup() {
-        let backend = TestBackend::new(100, 20);
+        let backend = TestBackend::new(100, 40); // Increased height for larger help menu
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = create_app();
         app.mode = InputMode::Help;
@@ -137,7 +152,8 @@ mod tests {
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert!(buffer_contains(buffer, "Kanban TUI Help"));
+        // Assert Title (Updated to match new modal title)
+        assert!(buffer_contains(buffer, "Help Menu"));
         assert!(buffer_contains(buffer, "Navigation"));
     }
 
@@ -155,21 +171,6 @@ mod tests {
         assert!(buffer_contains(buffer, "Title"));
         assert!(buffer_contains(buffer, "Category"));
         assert!(buffer_contains(buffer, "Description"));
-    }
-
-    // Helper to search buffer for string
-    fn buffer_contains(buffer: &ratatui::buffer::Buffer, s: &str) -> bool {
-        for y in 0..buffer.area.height {
-            let line_width = buffer.area.width;
-            let mut line_string = String::new();
-            for x in 0..line_width {
-                line_string.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-            if line_string.contains(s) {
-                return true;
-            }
-        }
-        false
     }
 
     #[test]
@@ -221,10 +222,10 @@ mod tests {
         app.filter_query = "urgent".into();
         terminal.draw(|f| draw(f, &mut app)).unwrap();
 
+        // Assert new footer format
         assert!(buffer_contains(
             terminal.backend().buffer(),
-            "FILTER (Active)"
+            "FILTER: urgent"
         ));
-        assert!(buffer_contains(terminal.backend().buffer(), "urgent"));
     }
 }
