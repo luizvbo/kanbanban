@@ -137,9 +137,16 @@ pub fn handle_editing(app: &mut App, key: KeyEvent) {
                 }
             }
         }
-        // FIX FOR ISSUE #4: 'o' only opens editor if Description is focused
         KeyCode::Char('o') if key.modifiers == crossterm::event::KeyModifiers::NONE => {
-            if let Some(EditField::Description) = app.get_focused_field() {
+            let is_typing_desc = app
+                .edit_state
+                .as_ref()
+                .map(|s| s.focused_field == EditField::Description && s.description_edit_mode)
+                .unwrap_or(false);
+
+            if is_typing_desc {
+                app.edit_input_char('o');
+            } else if let Some(EditField::Description) = app.get_focused_field() {
                 app.open_external_editor();
             } else {
                 app.edit_input_char('o');

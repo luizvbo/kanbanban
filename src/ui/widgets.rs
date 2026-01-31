@@ -8,6 +8,27 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+/// Centers a rect with a fixed height (in rows) and percentage width.
+pub fn centered_fixed_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length((r.height.saturating_sub(height)) / 2),
+            Constraint::Length(height),
+            Constraint::Length((r.height.saturating_sub(height)) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
 pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -135,25 +156,61 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         }
     );
 
-    let help_text = match app.mode {
-        InputMode::Editing => " [Esc] Back/Save | [Tab] Cycle | [o] Editor | [Enter] Select/Edit ",
-        InputMode::Normal => {
-            " [q] Quit | [?] Help | [v] View | [a] Add | [h/j/k/l] Nav | [H/J/K/L] Move "
-        }
-        InputMode::ViewCard => " [Esc/q] Close | [j/k] Scroll | [o] Editor ",
-        _ => " [Esc] Return to Normal ",
-    };
-    let text = Line::from(vec![
-        Span::styled(
-            mode_str,
+    let mode_style = Style::default()
+        .bg(Color::Blue)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+
+    // Determine the middle content: Status Message OR Filter Query
+    let (content, style) = if app.mode == InputMode::Filter || !app.filter_query.is_empty() {
+        (
+            format!(" FILTER: {} ", app.filter_query),
             Style::default()
-                .bg(Color::Blue)
-                .fg(Color::Black)
+                .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(help_text, Style::default().fg(Color::Gray)),
-    ]);
-    f.render_widget(Paragraph::new(text), area);
+        )
+    } else if let Some(msg) = &app.status_message {
+        // Only show status if recent (< 3 secs)
+        if let Some(time) = app.status_time {
+            if time.elapsed().as_secs() < 3 {
+                (format!(" {} ", msg), Style::default().fg(Color::White))
+            } else {
+                (String::new(), Style::default())
+            }
+        } else {
+            (String::new(), Style::default())
+        }
+    } else {
+        (String::new(), Style::default())
+    };
+
+    // Right side help
+    let help_text = " [?] Help ";
+
+    // Layout: [MODE] [Status/Filter ......] [Help]
+    // We use a Layout to split the footer area to ensure alignment
+    let footer_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(mode_str.len() as u16),
+            Constraint::Min(1),
+            Constraint::Length(help_text.len() as u16),
+        ])
+        .split(area);
+
+    // 1. Mode
+    f.render_widget(Paragraph::new(mode_str).style(mode_style), footer_chunks[0]);
+
+    // 2. Content (Filter/Status)
+    f.render_widget(Paragraph::new(content).style(style), footer_chunks[1]);
+
+    // 3. Help
+    f.render_widget(
+        Paragraph::new(help_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(ratatui::layout::Alignment::Right),
+        footer_chunks[2],
+    );
 }
 
 pub fn draw_filter_bar(f: &mut Frame, app: &App) {

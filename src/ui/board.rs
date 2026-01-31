@@ -298,13 +298,23 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
     for (i, line) in full_markdown.lines.iter().enumerate().take(2) {
         let mut new_line = line.clone();
 
-        // If this is the second line and there's more content, append the hint
-        let is_overflowing = (i == 1 && total_parsed_lines > 2)
-            || (i == 0 && total_parsed_lines > 1 && total_parsed_lines <= 2);
+        // Logic: If this is the 2nd line (index 1) and there is more content...
+        if i == 1 && total_parsed_lines > 2 {
+            // 1. Truncate the existing spans in this line to make room
+            // This is a visual heuristic. We assume if there's overflow, we want to see the hint.
+            if let Some(last_span) = new_line.spans.last_mut() {
+                // Naive truncation: keep first 30 chars of the last span if it's long
+                // A proper solution requires calculating width against Rect,
+                // but this solves the "growing forever" issue.
+                if last_span.content.len() > 20 {
+                    let truncated = format!("{}...", &last_span.content[..20]);
+                    *last_span = Span::styled(truncated, last_span.style);
+                }
+            }
 
-        if is_overflowing {
+            // 2. Append the hint to THIS line, not a new one
             new_line.spans.push(Span::styled(
-                " ... [v] Details",
+                " [v] Details",
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::ITALIC),
@@ -315,9 +325,8 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
     }
 
     if display_text.is_empty() && !card.description.is_empty() {
-        // Fallback for weird parsing edge cases
         f.render_widget(
-            Paragraph::new("... Press v for details").style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("... [v] Details").style(Style::default().fg(Color::DarkGray)),
             chunks[chunk_idx],
         );
     } else {

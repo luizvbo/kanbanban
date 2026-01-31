@@ -8,7 +8,7 @@ use crate::ui::modals::{
     draw_category_selector, draw_column_delete_modal, draw_delete_confirmation, draw_detail_view,
     draw_edit_popup, draw_exit_confirmation, draw_help_popup, draw_input_modal, draw_tag_selector,
 };
-use crate::ui::widgets::{draw_filter_bar, draw_footer};
+use crate::ui::widgets::draw_footer;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::{
@@ -51,10 +51,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_board(f, app, chunks[1]);
     draw_footer(f, app, chunks[2]);
-
-    if app.mode == InputMode::Filter || !app.filter_query.is_empty() {
-        draw_filter_bar(f, app);
-    }
 
     match app.mode {
         InputMode::Help => draw_help_popup(f, app),

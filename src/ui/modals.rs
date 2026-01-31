@@ -1,6 +1,6 @@
 use crate::app::state::EditField;
 use crate::app::{App, InputMode};
-use crate::ui::widgets::{centered_rect, create_input_block, parse_markdown};
+use crate::ui::widgets::{centered_fixed_rect, centered_rect, create_input_block, parse_markdown};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -10,8 +10,9 @@ use ratatui::{
 };
 
 pub fn draw_input_modal(f: &mut Frame, title: &str, input: &str) {
-    // Shorter height (3 lines instead of 15% of screen)
-    let area = centered_rect(60, 3, f.area());
+    // Use fixed height of 3 rows (Border + Text + Border)
+    let area = centered_fixed_rect(60, 3, f.area());
+
     f.render_widget(Clear, area);
 
     let block = Block::default()
@@ -28,7 +29,7 @@ pub fn draw_input_modal(f: &mut Frame, title: &str, input: &str) {
 
     f.render_widget(input_widget, area);
 
-    // Position cursor after the "> " and input text
+    // Position cursor: Area X + Border(1) + "> "(2) + Input Len
     f.set_cursor_position((area.x + 3 + input.len() as u16, area.y + 1));
 }
 
