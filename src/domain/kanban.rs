@@ -76,6 +76,8 @@ pub struct KanbanData {
     /// consistency across the whole board.
     #[serde(default)]
     pub known_tags: Vec<Tag>,
+    #[serde(default)]
+    pub known_categories: Vec<Tag>,
 }
 
 impl Default for KanbanData {
@@ -83,14 +85,18 @@ impl Default for KanbanData {
         Self {
             known_tags: vec![
                 Tag {
-                    name: "bug".into(),
+                    name: "Bug".into(),
                     color: Some("Red".into()),
                 },
                 Tag {
-                    name: "feature".into(),
+                    name: "Feature".into(),
                     color: Some("Green".into()),
                 },
             ],
+            known_categories: vec![Tag {
+                name: "General".into(),
+                color: Some("Blue".into()),
+            }],
             projects: vec![Project {
                 name: "Default Board".to_string(),
                 columns: vec![
@@ -186,13 +192,48 @@ impl KanbanData {
             return Tag::parse_color_string(c);
         }
         // 2. Check global known_tags
-        if let Some(global_tag) = self.known_tags.iter().find(|t| t.name == tag.name)
-            && let Some(c) = &global_tag.color
-        {
-            return Tag::parse_color_string(c);
+        if let Some(global) = self.known_tags.iter().find(|t| t.name == tag.name) {
+            if let Some(c) = &global.color {
+                return Tag::parse_color_string(c);
+            }
         }
         // 3. Fallback
         Color::White
+    }
+
+    pub fn get_category_color(&self, category_name: &str) -> Color {
+        if let Some(cat) = self
+            .known_categories
+            .iter()
+            .find(|c| c.name == category_name)
+        {
+            if let Some(c) = &cat.color {
+                return Tag::parse_color_string(c);
+            }
+        }
+        Color::White
+    }
+
+    /// Returns a color from a predefined distinct palette based on index.
+    pub fn get_next_color(index: usize) -> String {
+        let palette = [
+            "Red",
+            "Green",
+            "Blue",
+            "Yellow",
+            "Magenta",
+            "Cyan",
+            "LightRed",
+            "LightGreen",
+            "LightBlue",
+            "LightYellow",
+            "LightMagenta",
+            "LightCyan",
+            "Orange",
+            "Gray",
+            "DarkGray",
+        ];
+        palette[index % palette.len()].to_string()
     }
 }
 

@@ -5,8 +5,8 @@ pub mod widgets;
 use crate::app::{App, InputMode};
 use crate::ui::board::draw_board;
 use crate::ui::modals::{
-    draw_category_selector, draw_column_delete_modal, draw_delete_confirmation, draw_detail_view,
-    draw_edit_popup, draw_exit_confirmation, draw_help_popup, draw_input_modal, draw_tag_selector,
+    draw_column_delete_modal, draw_delete_confirmation, draw_detail_view, draw_edit_popup,
+    draw_exit_confirmation, draw_help_popup, draw_input_modal, draw_selector,
 };
 use crate::ui::widgets::draw_footer;
 use ratatui::text::{Line, Span};
@@ -55,13 +55,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.mode {
         InputMode::Help => draw_help_popup(f, app),
         InputMode::Editing => draw_edit_popup(f, app),
-        InputMode::TagSelection => {
+        InputMode::Selector => {
             draw_edit_popup(f, app);
-            draw_tag_selector(f, app);
-        }
-        InputMode::CategorySelection => {
-            draw_edit_popup(f, app);
-            draw_category_selector(f, app);
+            draw_selector(f, app);
         }
         InputMode::ExitingModal => {
             draw_edit_popup(f, app);
@@ -202,7 +198,7 @@ mod tests {
 
         // 4. Tag Selector
         app.start_new_card();
-        app.open_tag_selector(); // Sets mode to TagSelection
+        app.open_selector(crate::app::state::SelectorType::Tag); // Sets mode to TagSelection
         terminal.draw(|f| draw(f, &mut app)).unwrap();
         assert!(buffer_contains(terminal.backend().buffer(), "Select Tags"));
 

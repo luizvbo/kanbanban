@@ -1,4 +1,4 @@
-use crate::app::state::EditField;
+use crate::app::state::{EditField, SelectorType};
 use crate::app::{App, InputMode};
 use crate::ui::widgets::{centered_fixed_rect, centered_rect, create_input_block, parse_markdown};
 use ratatui::{
@@ -233,97 +233,18 @@ pub fn draw_detail_view(f: &mut Frame, app: &App) {
     );
 }
 
-pub fn draw_tag_selector(f: &mut Frame, app: &App) {
-    if let Some(selector) = &app.tag_selector_state {
+pub fn draw_selector(f: &mut Frame, app: &App) {
+    if let Some(selector) = &app.selector_state {
         let area = centered_rect(40, 50, f.area());
         f.render_widget(Clear, area);
 
-        let block = Block::default()
-            .title(" Select Tags (Enter: Toggle | Esc: Save & Close) ")
-            .borders(Borders::ALL)
-            .style(Style::default().bg(Color::Black));
-
-        let inner_area = block.inner(area);
-        f.render_widget(block, area);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Search Bar
-                Constraint::Min(1),    // List
-            ])
-            .split(inner_area);
-
-        // 1. Search Bar
-        let search_text = if selector.search_query.is_empty() {
-            Span::styled(
-                "Type to filter/create...",
-                Style::default().fg(Color::DarkGray),
-            )
-        } else {
-            Span::raw(&selector.search_query)
+        let title = match selector.mode {
+            SelectorType::Tag => " Select Tags ",
+            SelectorType::Category => " Select Category ",
         };
 
-        let search_block = Paragraph::new(search_text)
-            .block(Block::default().borders(Borders::BOTTOM).title(" Search "));
-        f.render_widget(search_block, chunks[0]);
-
-        // 2. Filtered List
-        let filtered = app.get_filtered_tags();
-        let mut items: Vec<ListItem> = filtered
-            .iter()
-            .enumerate()
-            .map(|(view_idx, (real_idx, tag))| {
-                let is_selected = selector.selected_indices.contains(real_idx);
-                let checkbox = if is_selected { "[x] " } else { "[ ] " };
-                let content = format!("{}{}", checkbox, tag.name);
-
-                let style = if view_idx == selector.current_index {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-
-                let color = app.data.get_tag_color(tag);
-
-                ListItem::new(Line::from(vec![
-                    Span::styled(content, style),
-                    Span::raw(" "),
-                    Span::styled("●", Style::default().fg(color)),
-                ]))
-            })
-            .collect();
-
-        if !selector.search_query.is_empty() {
-            let is_highlighted = selector.current_index == filtered.len();
-            let style = if is_highlighted {
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            items.push(ListItem::new(Line::from(vec![Span::styled(
-                format!("+ Create tag \"{}\"", selector.search_query),
-                style,
-            )])));
-        }
-
-        let list = List::new(items);
-        f.render_widget(list, chunks[1]);
-    }
-}
-
-pub fn draw_category_selector(f: &mut Frame, app: &App) {
-    if let Some(selector) = &app.category_selector_state {
-        let area = centered_rect(40, 50, f.area());
-        f.render_widget(Clear, area);
-
         let block = Block::default()
-            .title(" Select Category ")
+            .title(title)
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::Black));
 
@@ -335,10 +256,11 @@ pub fn draw_category_selector(f: &mut Frame, app: &App) {
             .constraints([
                 Constraint::Length(3), // Search
                 Constraint::Min(1),    // List
+                Constraint::Length(1), // Footer
             ])
             .split(inner_area);
 
-        // Search Bar
+        // 1. Search
         let search_text = if selector.search_query.is_empty() {
             Span::styled(
                 "Type to filter/create...",
@@ -353,27 +275,61 @@ pub fn draw_category_selector(f: &mut Frame, app: &App) {
             chunks[0],
         );
 
-        // List
-        let filtered = selector.get_filtered_categories();
+        // 2. List
+        let filtered = selector.get_filtered_items();
         let mut items: Vec<ListItem> = filtered
             .iter()
             .enumerate()
-            .map(|(i, cat)| {
-                let style = if i == selector.current_index {
+            .map(|(view_idx, (_, tag))| {
+                let is_selected = selector.selected_items.contains(&tag.name);
+
+                // UX: Distinguish between Multi-select (Tag) and Single-select (Category)
+                let indicator = match selector.mode {
+                    SelectorType::Tag => {
+                        if is_selected {
+                            "[x] "
+                        } else {
+                            "[ ] "
+                        }
+                    }
+                    SelectorType::Category => {
+                        if is_selected {
+                            "(●) "
+                        } else {
+                            "( ) "
+                        }
+                    }
+                };
+
+                let content = format!("{}{}", indicator, tag.name);
+
+                let style = if view_idx == selector.current_index {
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::White)
                 };
-                ListItem::new(Span::styled(cat, style))
+
+                // Parse the color stored in the tag
+                let color = if let Some(c) = &tag.color {
+                    crate::domain::kanban::Tag::parse_color_string(c)
+                } else {
+                    Color::White
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(content, style),
+                    Span::raw(" "),
+                    Span::styled("■", Style::default().fg(color)), // Show color swatch
+                ]))
             })
             .collect();
 
-        // "Create New" option if searching
+        // "Create New" Option
         if !selector.search_query.is_empty() {
-            let is_selected = selector.current_index == filtered.len();
-            let style = if is_selected {
+            let is_highlighted = selector.current_index == filtered.len();
+            let style = if is_highlighted {
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD)
@@ -381,12 +337,19 @@ pub fn draw_category_selector(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::DarkGray)
             };
             items.push(ListItem::new(Span::styled(
-                format!("+ Use \"{}\"", selector.search_query),
+                format!("+ Create \"{}\"", selector.search_query),
                 style,
             )));
         }
 
         f.render_widget(List::new(items), chunks[1]);
+
+        // 3. Footer Instructions
+        let footer = "Enter: Toggle | Del: Delete | Esc: Done";
+        f.render_widget(
+            Paragraph::new(footer).style(Style::default().fg(Color::Cyan)),
+            chunks[2],
+        );
     }
 }
 

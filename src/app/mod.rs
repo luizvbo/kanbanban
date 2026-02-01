@@ -1,6 +1,6 @@
 pub mod state;
 
-use crate::app::state::{CategorySelectorState, EditField, EditState, TagSelectorState};
+use crate::app::state::{EditField, EditState, SelectorState, SelectorType};
 use crate::domain::kanban::{Column, KanbanData, Project, Tag};
 use anyhow::Result;
 use std::path::PathBuf;
@@ -15,10 +15,8 @@ pub enum InputMode {
     Normal,
     /// Editing a specific card's fields
     Editing,
-    /// Modal for picking tags
-    TagSelection,
-    /// Modal for picking/creating categories
-    CategorySelection,
+    /// Modal for picking tags/categories
+    Selector,
     /// Information overlay
     Help,
     /// Confirming if unsaved changes should be kept
@@ -76,10 +74,8 @@ pub struct App {
     // --- Sub-States (Contextual Data) ---
     /// State container for the card editor
     pub edit_state: Option<EditState>,
-    /// State container for the tag picker
-    pub tag_selector_state: Option<TagSelectorState>,
-    /// State container for the category picker
-    pub category_selector_state: Option<CategorySelectorState>,
+    /// State container for the tag/category picker
+    pub selector_state: Option<SelectorState>,
 
     // --- Temporary Input Buffers ---
     /// Buffer for renaming projects/columns
@@ -103,8 +99,7 @@ impl App {
             current_col_idx: 0,
             current_card_idx: 0,
             edit_state: None,
-            tag_selector_state: None,
-            category_selector_state: None,
+            selector_state: None,
             status_message: None,
             status_time: None,
             prompt_input: String::new(),
@@ -354,84 +349,6 @@ impl App {
             }
         }
         let _ = std::fs::remove_file(temp_file);
-    }
-
-    // --- Category Operations ---
-    pub fn open_category_selector(&mut self) {
-        if let Some(state) = &self.edit_state {
-            // Collect all unique categories from the current project
-            let mut categories: Vec<String> = self
-                .current_project()
-                .columns
-                .iter()
-                .flat_map(|c| c.cards.iter())
-                .filter_map(|c| c.category.clone())
-                .collect();
-            categories.sort();
-            categories.dedup();
-
-            self.category_selector_state =
-                Some(CategorySelectorState::new(categories, &state.category));
-            self.mode = InputMode::CategorySelection;
-        }
-    }
-
-    pub fn close_category_selector(&mut self) {
-        self.category_selector_state = None;
-        self.mode = InputMode::Editing;
-    }
-
-    pub fn category_selector_confirm(&mut self) {
-        if let Some(selector) = &self.category_selector_state
-            && let Some(edit_state) = &mut self.edit_state
-        {
-            // If we have a selection, use it.
-            // If search query is not empty and no selection, use search query (new category)
-            let filtered = selector.get_filtered_categories();
-            if let Some(cat) = filtered.get(selector.current_index) {
-                edit_state.category = cat.clone();
-            } else if !selector.search_query.is_empty() {
-                edit_state.category = selector.search_query.clone();
-            }
-        }
-        self.close_category_selector();
-    }
-
-    pub fn category_selector_input_char(&mut self, c: char) {
-        if let Some(selector) = &mut self.category_selector_state {
-            selector.search_query.push(c);
-            selector.current_index = 0;
-        }
-    }
-
-    pub fn category_selector_backspace(&mut self) {
-        if let Some(selector) = &mut self.category_selector_state {
-            selector.search_query.pop();
-            selector.current_index = 0;
-        }
-    }
-
-    pub fn category_selector_next(&mut self) {
-        if let Some(selector) = &mut self.category_selector_state {
-            let count = selector.get_filtered_categories().len();
-            // Allow going one past end to select "Create New" if query exists
-            let limit = if !selector.search_query.is_empty() {
-                count
-            } else {
-                count.saturating_sub(1)
-            };
-            if selector.current_index < limit {
-                selector.current_index += 1;
-            }
-        }
-    }
-
-    pub fn category_selector_prev(&mut self) {
-        if let Some(selector) = &mut self.category_selector_state
-            && selector.current_index > 0
-        {
-            selector.current_index -= 1;
-        }
     }
 
     // --- Column Operations ---
@@ -977,119 +894,227 @@ impl App {
     // the temporary "Sub-States" needed for complex interactions like
     // searching for tags or choosing categories.
 
-    /// Prepares the TagSelector sub-state and switches the app mode.
-    /// This "snapshots" the current tags so they can be edited in isolation.
-    pub fn open_tag_selector(&mut self) {
-        if let Some(state) = &self.edit_state {
-            self.tag_selector_state = Some(TagSelectorState::new(
-                self.data.known_tags.clone(),
-                &state.tags,
-            ));
-            self.mode = InputMode::TagSelection;
+    pub fn open_selector(&mut self, mode: SelectorType) {
+        if let Some(edit_state) = &self.edit_state {
+            let (available, current) = match mode {
+                SelectorType::Tag => (
+                    self.data.known_tags.clone(),
+                    edit_state.tags.iter().map(|t| t.name.clone()).collect(),
+                ),
+                SelectorType::Category => (
+                    self.data.known_categories.clone(),
+                    if edit_state.category.is_empty() {
+                        vec![]
+                    } else {
+                        vec![edit_state.category.clone()]
+                    },
+                ),
+            };
+
+            self.selector_state = Some(SelectorState::new(mode, available, current));
+            self.mode = InputMode::Selector;
         }
     }
 
-    pub fn close_tag_selector(&mut self) {
-        self.tag_selector_state = None;
+    pub fn close_selector(&mut self) {
+        self.selector_state = None;
         self.mode = InputMode::Editing;
     }
 
-    pub fn tag_selector_confirm(&mut self) {
-        if let Some(selector) = &self.tag_selector_state
-            && let Some(edit_state) = &mut self.edit_state
-        {
-            edit_state.tags = selector.get_selected_tags();
-        }
-        self.close_tag_selector();
-    }
-
-    pub fn get_filtered_tags(&self) -> Vec<(usize, Tag)> {
-        if let Some(selector) = &self.tag_selector_state {
-            selector.get_filtered_tags()
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub fn tag_selector_input_char(&mut self, c: char) {
-        if let Some(selector) = &mut self.tag_selector_state {
-            selector.search_query.push(c);
-            selector.current_index = 0;
-        }
-    }
-
-    pub fn tag_selector_backspace(&mut self) {
-        if let Some(selector) = &mut self.tag_selector_state {
-            selector.search_query.pop();
-            selector.current_index = 0;
-        }
-    }
-
-    pub fn tag_selector_next(&mut self) {
-        let filtered_len = self.get_filtered_tags().len();
-        if let Some(selector) = &mut self.tag_selector_state {
-            let limit = if !selector.search_query.is_empty() {
-                filtered_len
-            } else {
-                filtered_len.saturating_sub(1)
-            };
-
-            if selector.current_index < limit {
-                selector.current_index += 1;
+    pub fn selector_confirm(&mut self) {
+        if let Some(selector) = &self.selector_state {
+            if let Some(edit_state) = &mut self.edit_state {
+                match selector.mode {
+                    SelectorType::Tag => {
+                        // Reconstruct Tag objects with colors
+                        let mut new_tags = Vec::new();
+                        for name in &selector.selected_items {
+                            let color = self
+                                .data
+                                .known_tags
+                                .iter()
+                                .find(|t| t.name == *name)
+                                .and_then(|t| t.color.clone());
+                            new_tags.push(Tag {
+                                name: name.clone(),
+                                color,
+                            });
+                        }
+                        edit_state.tags = new_tags;
+                    }
+                    SelectorType::Category => {
+                        if let Some(first) = selector.selected_items.first() {
+                            edit_state.category = first.clone();
+                        } else if !selector.search_query.is_empty() {
+                            // Allow creating new category on confirm if list is empty but query exists
+                            edit_state.category = selector.search_query.clone();
+                        }
+                    }
+                }
             }
         }
+        self.close_selector();
     }
 
-    pub fn tag_selector_prev(&mut self) {
-        if let Some(selector) = &mut self.tag_selector_state
-            && selector.current_index > 0
-        {
-            selector.current_index -= 1;
-        }
-    }
+    pub fn selector_toggle_or_create(&mut self) {
+        // We need to mutate data, so we extract what we need first
+        let (mode, query, current_idx) = if let Some(s) = &self.selector_state {
+            (s.mode, s.search_query.clone(), s.current_index)
+        } else {
+            return;
+        };
 
-    pub fn tag_selector_toggle_or_create(&mut self) {
-        let filtered = self.get_filtered_tags();
+        let filtered = self.get_filtered_selector_items();
 
-        if let Some(selector) = &mut self.tag_selector_state
-            && !selector.search_query.is_empty()
-            && selector.current_index == filtered.len()
-        {
-            // CREATE NEW TAG
-            let new_name = selector.search_query.clone();
-            let colors = ["Red", "Green", "Blue", "Yellow", "Magenta", "Cyan"];
-            let color_choice = colors[self.data.known_tags.len() % colors.len()];
+        // CASE 1: Create New Item
+        if !query.is_empty() && current_idx == filtered.len() {
+            let color = KanbanData::get_next_color(match mode {
+                SelectorType::Tag => self.data.known_tags.len(),
+                SelectorType::Category => self.data.known_categories.len(),
+            });
 
-            let new_tag = Tag {
-                name: new_name,
-                color: Some(color_choice.to_string()),
+            let new_item = Tag {
+                name: query.clone(),
+                color: Some(color),
             };
 
-            self.data.known_tags.push(new_tag.clone());
+            match mode {
+                SelectorType::Tag => self.data.known_tags.push(new_item.clone()),
+                SelectorType::Category => self.data.known_categories.push(new_item.clone()),
+            }
 
-            let new_idx = self.data.known_tags.len() - 1;
-            selector.selected_indices.push(new_idx);
+            // Auto-select the new item
+            if let Some(s) = &mut self.selector_state {
+                s.available_items.push(new_item);
+                s.search_query.clear();
+                s.current_index = 0; // Reset
 
-            selector.search_query.clear();
-            selector.available_tags = self.data.known_tags.clone();
-            selector.current_index = 0;
+                match mode {
+                    SelectorType::Tag => s.selected_items.push(query),
+                    SelectorType::Category => {
+                        s.selected_items.clear(); // Single select
+                        s.selected_items.push(query);
+                    }
+                }
+            }
             return;
         }
 
-        // Toggle logic
-        if let Some((real_idx, _)) =
-            filtered.get(self.tag_selector_state.as_ref().unwrap().current_index)
-            && let Some(selector) = &mut self.tag_selector_state
-        {
-            if let Some(pos) = selector
-                .selected_indices
-                .iter()
-                .position(|&x| x == *real_idx)
-            {
-                selector.selected_indices.remove(pos);
-            } else {
-                selector.selected_indices.push(*real_idx);
+        // CASE 2: Toggle Existing Item
+        if let Some((_, item)) = filtered.get(current_idx) {
+            if let Some(s) = &mut self.selector_state {
+                match mode {
+                    SelectorType::Tag => {
+                        if let Some(pos) = s.selected_items.iter().position(|x| x == &item.name) {
+                            s.selected_items.remove(pos);
+                        } else {
+                            s.selected_items.push(item.name.clone());
+                        }
+                    }
+                    SelectorType::Category => {
+                        s.selected_items.clear(); // Single select
+                        s.selected_items.push(item.name.clone());
+                        // Optional: Close immediately on category select?
+                        // Let's keep it open to allow changing mind, consistent with tags.
+                    }
+                }
             }
+        }
+    }
+
+    pub fn selector_delete_item(&mut self) {
+        let (mode, current_idx) = if let Some(s) = &self.selector_state {
+            (s.mode, s.current_index)
+        } else {
+            return;
+        };
+
+        let filtered = self.get_filtered_selector_items();
+
+        if let Some((_real_idx, item)) = filtered.get(current_idx) {
+            // Remove from global known lists
+            match mode {
+                SelectorType::Tag => {
+                    // Find index in known_tags based on name to be safe
+                    if let Some(pos) = self
+                        .data
+                        .known_tags
+                        .iter()
+                        .position(|t| t.name == item.name)
+                    {
+                        self.data.known_tags.remove(pos);
+                    }
+                }
+                SelectorType::Category => {
+                    if let Some(pos) = self
+                        .data
+                        .known_categories
+                        .iter()
+                        .position(|t| t.name == item.name)
+                    {
+                        self.data.known_categories.remove(pos);
+                    }
+                }
+            }
+
+            // Update state
+            if let Some(s) = &mut self.selector_state {
+                // Remove from available
+                if let Some(pos) = s.available_items.iter().position(|t| t.name == item.name) {
+                    s.available_items.remove(pos);
+                }
+                // Remove from selected if it was selected
+                if let Some(pos) = s.selected_items.iter().position(|n| n == &item.name) {
+                    s.selected_items.remove(pos);
+                }
+                // Adjust cursor
+                if s.current_index > 0 && s.current_index >= s.available_items.len() {
+                    s.current_index = s.available_items.len().saturating_sub(1);
+                }
+            }
+        }
+    }
+
+    pub fn get_filtered_selector_items(&self) -> Vec<(usize, Tag)> {
+        self.selector_state
+            .as_ref()
+            .map(|s| s.get_filtered_items())
+            .unwrap_or_default()
+    }
+
+    pub fn selector_next(&mut self) {
+        if let Some(s) = &mut self.selector_state {
+            let count = s.get_filtered_items().len();
+            let limit = if !s.search_query.is_empty() {
+                count
+            } else {
+                count.saturating_sub(1)
+            };
+            if s.current_index < limit {
+                s.current_index += 1;
+            }
+        }
+    }
+
+    pub fn selector_prev(&mut self) {
+        if let Some(s) = &mut self.selector_state {
+            if s.current_index > 0 {
+                s.current_index -= 1;
+            }
+        }
+    }
+
+    pub fn selector_input_char(&mut self, c: char) {
+        if let Some(s) = &mut self.selector_state {
+            s.search_query.push(c);
+            s.current_index = 0;
+        }
+    }
+
+    pub fn selector_backspace(&mut self) {
+        if let Some(s) = &mut self.selector_state {
+            s.search_query.pop();
+            s.current_index = 0;
         }
     }
 }
@@ -1351,14 +1376,14 @@ mod tests {
     fn test_tag_selector_logic() {
         let mut app = create_test_app();
         app.start_new_card();
-        app.open_tag_selector();
+        app.open_selector(SelectorType::Tag);
 
-        assert!(app.tag_selector_state.is_some());
+        assert!(app.selector_state.is_some());
 
         // Filter
-        app.tag_selector_input_char('b');
-        app.tag_selector_input_char('u');
-        let filtered = app.get_filtered_tags();
+        app.selector_input_char('b');
+        app.selector_input_char('u');
+        let filtered = app.get_filtered_selector_items();
         assert!(
             filtered
                 .iter()
@@ -1366,9 +1391,10 @@ mod tests {
         );
 
         // Create New Tag logic
-        app.tag_selector_state.as_mut().unwrap().search_query = "NewTag".into();
-        app.tag_selector_state.as_mut().unwrap().current_index = app.get_filtered_tags().len(); // Select "Create New"
-        app.tag_selector_toggle_or_create();
+        app.selector_state.as_mut().unwrap().search_query = "NewTag".into();
+        app.selector_state.as_mut().unwrap().current_index =
+            app.get_filtered_selector_items().len(); // Select "Create New"
+        app.selector_toggle_or_create();
 
         assert!(app.data.known_tags.iter().any(|t| t.name == "NewTag"));
     }

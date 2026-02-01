@@ -61,15 +61,15 @@ pub fn handle_help(app: &mut App, key: KeyEvent) {
     }
 }
 
-pub fn handle_tag_selection(app: &mut App, key: KeyEvent) {
+pub fn handle_selector(app: &mut App, key: KeyEvent) {
     match key.code {
-        KeyCode::Esc => app.tag_selector_confirm(),
-        KeyCode::Enter => app.tag_selector_toggle_or_create(),
-        KeyCode::Tab => app.tag_selector_confirm(),
-        KeyCode::Down => app.tag_selector_next(),
-        KeyCode::Up => app.tag_selector_prev(),
-        KeyCode::Backspace => app.tag_selector_backspace(),
-        KeyCode::Char(c) => app.tag_selector_input_char(c),
+        KeyCode::Esc => app.selector_confirm(), // Save & Close
+        KeyCode::Enter => app.selector_toggle_or_create(),
+        KeyCode::Delete | KeyCode::Char('x') => app.selector_delete_item(), // Added Delete support
+        KeyCode::Down => app.selector_next(),
+        KeyCode::Up => app.selector_prev(),
+        KeyCode::Backspace => app.selector_backspace(),
+        KeyCode::Char(c) => app.selector_input_char(c),
         _ => {}
     }
 }
@@ -130,8 +130,10 @@ pub fn handle_editing(app: &mut App, key: KeyEvent) {
                         app.toggle_description_edit();
                     }
                 }
-                Some(EditField::Tags) => app.open_tag_selector(),
-                Some(EditField::Category) => app.open_category_selector(),
+                Some(EditField::Tags) => app.open_selector(crate::app::state::SelectorType::Tag),
+                Some(EditField::Category) => {
+                    app.open_selector(crate::app::state::SelectorType::Category)
+                }
                 _ => {
                     app.cycle_edit_field(false);
                 }
@@ -184,17 +186,6 @@ pub fn handle_editing(app: &mut App, key: KeyEvent) {
         KeyCode::End => app.move_cursor_end(),
         KeyCode::Backspace => app.edit_input_backspace(),
         KeyCode::Char(c) => app.edit_input_char(c),
-        _ => {}
-    }
-}
-
-pub fn handle_category_selection(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Tab => app.category_selector_confirm(),
-        KeyCode::Down => app.category_selector_next(),
-        KeyCode::Up => app.category_selector_prev(),
-        KeyCode::Backspace => app.category_selector_backspace(),
-        KeyCode::Char(c) => app.category_selector_input_char(c),
         _ => {}
     }
 }

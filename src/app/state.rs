@@ -9,85 +9,43 @@ pub enum EditField {
     Description,
 }
 
-pub struct CategorySelectorState {
-    pub available_categories: Vec<String>,
+#[derive(PartialEq, Clone, Copy, Debug)]
+pub enum SelectorType {
+    Tag,
+    Category,
+}
+
+pub struct SelectorState {
+    pub mode: SelectorType,
+    pub available_items: Vec<Tag>,   // Stores both Name and Color
+    pub selected_items: Vec<String>, // Stores names of selected items
     pub current_index: usize,
     pub search_query: String,
 }
 
-impl CategorySelectorState {
-    pub fn new(available_categories: Vec<String>, current_category: &str) -> Self {
-        // Try to find current category index
-        let idx = available_categories
-            .iter()
-            .position(|c| c == current_category)
-            .unwrap_or(0);
-
+impl SelectorState {
+    pub fn new(
+        mode: SelectorType,
+        available_items: Vec<Tag>,
+        current_selection: Vec<String>,
+    ) -> Self {
         Self {
-            available_categories,
-            current_index: idx,
-            search_query: String::new(),
-        }
-    }
-
-    pub fn get_filtered_categories(&self) -> Vec<String> {
-        let query = self.search_query.to_lowercase();
-        if query.is_empty() {
-            self.available_categories.clone()
-        } else {
-            self.available_categories
-                .iter()
-                .filter(|c| c.to_lowercase().contains(&query))
-                .cloned()
-                .collect()
-        }
-    }
-}
-
-pub struct TagSelectorState {
-    pub available_tags: Vec<Tag>,
-    pub selected_indices: Vec<usize>,
-    pub current_index: usize,
-    pub search_query: String,
-}
-
-impl TagSelectorState {
-    pub fn new(available_tags: Vec<Tag>, current_tags: &[Tag]) -> Self {
-        let mut selected_indices = Vec::new();
-        for (i, avail) in available_tags.iter().enumerate() {
-            if current_tags.iter().any(|t| t.name == avail.name) {
-                selected_indices.push(i);
-            }
-        }
-        Self {
-            available_tags,
-            selected_indices,
+            mode,
+            available_items,
+            selected_items: current_selection,
             current_index: 0,
             search_query: String::new(),
         }
     }
 
-    pub fn get_filtered_tags(&self) -> Vec<(usize, Tag)> {
+    pub fn get_filtered_items(&self) -> Vec<(usize, Tag)> {
         let query = self.search_query.to_lowercase();
-        self.available_tags
+        self.available_items
             .iter()
             .enumerate()
-            .filter(|(_, tag)| tag.name.to_lowercase().contains(&query))
-            .map(|(i, tag)| (i, tag.clone()))
+            .filter(|(_, item)| item.name.to_lowercase().contains(&query))
+            .map(|(i, item)| (i, item.clone()))
             .collect()
-    }
-
-    pub fn get_selected_tags(&self) -> Vec<Tag> {
-        let mut tags = Vec::new();
-        for &idx in &self.selected_indices {
-            if let Some(tag) = self.available_tags.get(idx) {
-                tags.push(Tag {
-                    name: tag.name.clone(),
-                    color: None, // Use global color lookup
-                });
-            }
-        }
-        tags
     }
 }
 

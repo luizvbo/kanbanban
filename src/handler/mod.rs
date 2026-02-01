@@ -2,9 +2,9 @@ pub mod modes;
 
 use crate::app::{App, InputMode};
 use crate::handler::modes::{
-    handle_category_selection, handle_column_delete, handle_column_project_rename,
-    handle_delete_confirmation, handle_editing, handle_exiting_modal, handle_filter, handle_help,
-    handle_normal, handle_tag_selection, handle_view_card,
+    handle_column_delete, handle_column_project_rename, handle_delete_confirmation, handle_editing,
+    handle_exiting_modal, handle_filter, handle_help, handle_normal, handle_selector,
+    handle_view_card,
 };
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEventKind};
@@ -26,8 +26,7 @@ pub fn process_event(app: &mut App, event: Event) -> Result<()> {
             InputMode::Filter => handle_filter(app, key),
             InputMode::ViewCard => handle_view_card(app, key),
             InputMode::Help => handle_help(app, key),
-            InputMode::TagSelection => handle_tag_selection(app, key),
-            InputMode::CategorySelection => handle_category_selection(app, key),
+            InputMode::Selector => handle_selector(app, key),
             InputMode::ExitingModal => handle_exiting_modal(app, key),
             InputMode::DeleteConfirmation => handle_delete_confirmation(app, key),
             InputMode::Editing => handle_editing(app, key),
@@ -155,7 +154,7 @@ mod tests {
     fn test_tag_selection_interaction() {
         let mut app = create_app();
         app.start_new_card();
-        app.open_tag_selector(); // Sets mode to TagSelection
+        app.open_selector(crate::app::state::SelectorType::Tag); // Sets mode to TagSelection
 
         // Navigation
         process_event(&mut app, key(KeyCode::Down)).unwrap();
@@ -163,16 +162,10 @@ mod tests {
 
         // Input
         process_event(&mut app, key(KeyCode::Char('b'))).unwrap();
-        assert_eq!(app.tag_selector_state.as_ref().unwrap().search_query, "b");
+        assert_eq!(app.selector_state.as_ref().unwrap().search_query, "b");
 
         process_event(&mut app, key(KeyCode::Backspace)).unwrap();
-        assert!(
-            app.tag_selector_state
-                .as_ref()
-                .unwrap()
-                .search_query
-                .is_empty()
-        );
+        assert!(app.selector_state.as_ref().unwrap().search_query.is_empty());
 
         // Toggle/Confirm
         process_event(&mut app, key(KeyCode::Enter)).unwrap(); // Toggle
