@@ -85,6 +85,10 @@ mod tests {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
+    fn key_event(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
     #[test]
     fn test_all_normal_mode_keys() {
         let mut app = create_app();
@@ -175,13 +179,20 @@ mod tests {
     }
 
     #[test]
+
     fn test_editing_mode_interaction() {
         let mut app = create_app();
         app.start_new_card();
 
+        // FIX: Press Enter to switch from Navigation to Insert Mode
+        process_event(&mut app, key(KeyCode::Enter)).unwrap();
+
         // Typing
         process_event(&mut app, key(KeyCode::Char('A'))).unwrap();
         assert_eq!(app.edit_state.as_ref().unwrap().title, "A");
+
+        // Exit Insert Mode
+        process_event(&mut app, key(KeyCode::Esc)).unwrap();
 
         // Navigation
         process_event(&mut app, key(KeyCode::Tab)).unwrap(); // Cycle
@@ -277,5 +288,30 @@ mod tests {
         app.edit_state.as_mut().unwrap().title = "Dirty".into();
         process_event(&mut app, key(KeyCode::Esc)).unwrap();
         assert_eq!(app.mode, InputMode::ExitingModal);
+    }
+
+    #[test]
+
+    fn test_vim_edit_mode_transitions() {
+        let mut app = create_app(); // Use the robust create_app
+        app.start_new_card(); // Mode = Editing, Field = Title
+
+        // 1. Try typing 'j' - Should NOT type, should stay in nav
+        // (Note: Title is empty initially)
+        let _ = handle_editing(&mut app, key_event(KeyCode::Char('j')));
+        assert_eq!(app.edit_state.as_ref().unwrap().title, "");
+        assert!(!app.edit_state.as_ref().unwrap().is_editing_field);
+
+        // 2. Press Enter - Enter Insert Mode
+        let _ = handle_editing(&mut app, key_event(KeyCode::Enter));
+        assert!(app.edit_state.as_ref().unwrap().is_editing_field);
+
+        // 3. Type 'j' - Should type now
+        let _ = handle_editing(&mut app, key_event(KeyCode::Char('j')));
+        assert_eq!(app.edit_state.as_ref().unwrap().title, "j");
+
+        // 4. Press Esc - Exit Insert Mode
+        let _ = handle_editing(&mut app, key_event(KeyCode::Esc));
+        assert!(!app.edit_state.as_ref().unwrap().is_editing_field);
     }
 }

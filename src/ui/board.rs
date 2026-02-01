@@ -9,6 +9,29 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 
+// Helper to safely truncate string by visual width (char count)
+fn safe_truncate(s: &str, max_width: usize) -> (String, String) {
+    let mut width = 0;
+    let mut split_idx = 0;
+
+    for (i, c) in s.char_indices() {
+        if width >= max_width {
+            break;
+        }
+        width += 1;
+        split_idx = i + c.len_utf8();
+    }
+
+    let keep = s[..split_idx].to_string();
+    let rest = if split_idx < s.len() {
+        s[split_idx..].to_string()
+    } else {
+        String::new()
+    };
+
+    (keep, rest)
+}
+
 /// The main drawing loop for the Kanban columns.
 /// It splits the available area into equal chunks based on column count.
 pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
@@ -226,15 +249,18 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
     f.render_widget(block, area);
 
     // Layout Constraints
-    let mut constraints = vec![Constraint::Length(1)]; // Title
-    if !card.tags.is_empty() {
+    let mut constraints = vec![Constraint::Length(1)]; // Title (Row 1)
+
+    // Category + Tags (Row 2) - Always reserve space if either exists
+    if card.category.is_some() || !card.tags.is_empty() {
         constraints.push(Constraint::Length(1));
     }
+
     if card.due_date.is_some() {
         constraints.push(Constraint::Length(1));
     }
 
-    // FIX: Fixed length for description area (2 lines)
+    // Fixed length for description area (2 lines)
     constraints.push(Constraint::Length(2));
 
     let chunks = Layout::default()
@@ -244,38 +270,45 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
 
     let mut chunk_idx = 0;
 
-    // 1. Title + Category
-    let mut title_spans = Vec::new();
-    if let Some(cat) = &card.category {
-        title_spans.push(Span::styled(
-            format!(" {} ", cat),
-            Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        ));
-        title_spans.push(Span::raw(" "));
-    }
-    title_spans.push(Span::styled(
+    // --- 1. Title Only (Yellow/Bold) ---
+    let title_span = Span::styled(
         &card.title,
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-
-    f.render_widget(Paragraph::new(Line::from(title_spans)), chunks[chunk_idx]);
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    f.render_widget(
+        Paragraph::new(title_span).wrap(Wrap { trim: true }),
+        chunks[chunk_idx],
+    );
     chunk_idx += 1;
 
-    // --- 2. Tags ---
-    if !card.tags.is_empty() {
-        let mut tag_spans = Vec::new();
+    // --- 2. Category + Tags (Combined Row) ---
+    if card.category.is_some() || !card.tags.is_empty() {
+        let mut meta_spans = Vec::new();
+
+        // Category
+        if let Some(cat) = &card.category {
+            let cat_color = data.get_category_color(cat);
+            meta_spans.push(Span::styled("(", Style::default().fg(cat_color)));
+            meta_spans.push(Span::styled(
+                cat.to_uppercase(),
+                Style::default().fg(cat_color).add_modifier(Modifier::BOLD),
+            ));
+            meta_spans.push(Span::styled(") ", Style::default().fg(cat_color)));
+        }
+
+        // Tags
         for tag in &card.tags {
             let color = data.get_tag_color(tag);
-            tag_spans.push(Span::styled(
-                format!(" #{} ", tag.name),
+            meta_spans.push(Span::styled(
+                format!("#{} ", tag.name),
                 Style::default().bg(color).fg(Color::Black),
             ));
-            tag_spans.push(Span::raw(" "));
+            meta_spans.push(Span::raw(" "));
         }
-        f.render_widget(Line::from(tag_spans), chunks[chunk_idx]);
+
+        f.render_widget(Line::from(meta_spans), chunks[chunk_idx]);
         chunk_idx += 1;
     }
 
@@ -289,50 +322,123 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
         chunk_idx += 1;
     }
 
-    // --- 4. Description (Cropped to 2 lines) ---
+    // --- 4. Description ---
+    let max_width = inner.width as usize;
     let full_markdown = parse_markdown(&card.description);
-    let total_parsed_lines = full_markdown.lines.len();
-    let mut display_text = Vec::new();
 
-    // Only take the first two parsed lines
-    for (i, line) in full_markdown.lines.iter().enumerate().take(2) {
-        let mut new_line = line.clone();
+    let all_spans: Vec<Span> = full_markdown
+        .lines
+        .into_iter()
+        .flat_map(|line| {
+            let mut spans = line.spans;
+            spans.push(Span::raw(" "));
+            spans
+        })
+        .collect();
 
-        // Logic: If this is the 2nd line (index 1) and there is more content...
-        if i == 1 && total_parsed_lines > 2 {
-            // 1. Truncate the existing spans in this line to make room
-            // This is a visual heuristic. We assume if there's overflow, we want to see the hint.
-            if let Some(last_span) = new_line.spans.last_mut() {
-                // Naive truncation: keep first 30 chars of the last span if it's long
-                // A proper solution requires calculating width against Rect,
-                // but this solves the "growing forever" issue.
-                if last_span.content.len() > 20 {
-                    let truncated = format!("{}...", &last_span.content[..20]);
-                    *last_span = Span::styled(truncated, last_span.style);
-                }
+    let suffix = "... [v] to view";
+    let suffix_len = suffix.len();
+
+    let mut lines_to_draw = Vec::new();
+    let mut current_line_spans = Vec::new();
+    let mut current_width = 0;
+    let mut line_count = 0;
+
+    for span in all_spans {
+        if line_count >= 2 {
+            break;
+        }
+
+        let content = span.content.as_ref();
+        let span_len = content.chars().count();
+
+        let available = if line_count == 1 {
+            max_width.saturating_sub(suffix_len)
+        } else {
+            max_width
+        };
+
+        if current_width + span_len <= available {
+            current_line_spans.push(span);
+            current_width += span_len;
+        } else {
+            let remaining = available.saturating_sub(current_width);
+
+            // FIX: Use safe_truncate instead of split_at
+            if remaining > 0 {
+                let (keep, _) = safe_truncate(content, remaining);
+                current_line_spans.push(Span::styled(keep, span.style));
             }
 
-            // 2. Append the hint to THIS line, not a new one
-            new_line.spans.push(Span::styled(
-                " [v] Details",
+            lines_to_draw.push(Line::from(current_line_spans.clone()));
+            current_line_spans.clear();
+            line_count += 1;
+            current_width = 0;
+
+            if line_count >= 2 {
+                break;
+            }
+
+            let (_, rest) = safe_truncate(content, remaining);
+            let next_avail = if line_count == 1 {
+                max_width.saturating_sub(suffix_len)
+            } else {
+                max_width
+            };
+
+            // Safe truncate for the next line part as well
+            let (keep_next, _) = safe_truncate(&rest, next_avail);
+            current_width = keep_next.chars().count();
+            current_line_spans.push(Span::styled(keep_next, span.style));
+        }
+    }
+
+    if !current_line_spans.is_empty() && line_count < 2 {
+        lines_to_draw.push(Line::from(current_line_spans));
+    }
+
+    // Append suffix logic
+    let raw_desc_len: usize = card.description.len();
+    let rendered_len: usize = lines_to_draw.iter().map(|l| l.width()).sum();
+
+    if lines_to_draw.len() == 2 || raw_desc_len > rendered_len + 5 {
+        if let Some(last_line) = lines_to_draw.last_mut() {
+            last_line.spans.push(Span::styled(
+                suffix,
                 Style::default()
                     .fg(Color::DarkGray)
                     .add_modifier(Modifier::ITALIC),
             ));
+        } else {
+            lines_to_draw.push(Line::from(Span::styled(
+                suffix,
+                Style::default().fg(Color::DarkGray),
+            )));
         }
-
-        display_text.push(new_line);
     }
 
-    if display_text.is_empty() && !card.description.is_empty() {
-        f.render_widget(
-            Paragraph::new("... [v] Details").style(Style::default().fg(Color::DarkGray)),
-            chunks[chunk_idx],
-        );
-    } else {
-        f.render_widget(
-            Paragraph::new(display_text).wrap(Wrap { trim: true }),
-            chunks[chunk_idx],
-        );
+    f.render_widget(Paragraph::new(lines_to_draw), chunks[chunk_idx]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_safe_truncate() {
+        // Test standard ASCII
+        let (k, r) = safe_truncate("Hello", 2);
+        assert_eq!(k, "He");
+        assert_eq!(r, "llo");
+
+        // Test Multi-byte (Bullet point is 3 bytes)
+        let (k, r) = safe_truncate("• List", 1);
+        assert_eq!(k, "•"); // Should not panic
+        assert_eq!(r, " List");
+
+        // Test Boundary
+        let (k, r) = safe_truncate("ABC", 3);
+        assert_eq!(k, "ABC");
+        assert_eq!(r, "");
     }
 }

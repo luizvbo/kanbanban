@@ -15,6 +15,24 @@ use kanbanban::handler;
 use kanbanban::ui;
 
 fn main() -> Result<()> {
+    // --- Setup Logging ---
+    let file_appender = tracing_appender::rolling::daily("logs", "kanbanban.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .init();
+
+    // Hook panics to log them
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("Panic occurred: {:?}", info);
+        // Restore terminal before crashing so user sees the error
+        let _ = disable_raw_mode();
+        let _ = execute!(stdout(), LeaveAlternateScreen);
+        default_panic(info);
+    }));
     let args = Args::parse();
 
     enable_raw_mode()?;

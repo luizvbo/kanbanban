@@ -1,20 +1,28 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::state::EditField;
+use crate::app::state::{EditField, SelectorType};
 use crate::app::{App, InputMode};
 
 /// Reacts to keyboard input when the app is in 'Normal' mode (navigating the board).
 pub fn handle_normal(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('q') => app.quit(),
-        KeyCode::Char('h') => app.prev_column(),
-        KeyCode::Char('l') => app.next_column(),
-        KeyCode::Char('j') => app.next_card(),
-        KeyCode::Char('k') => app.prev_card(),
+        // Shift+Arrows for movement
+        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => app.move_card_down(),
+        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => app.move_card_up(),
+        KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => app.move_card_left(),
+        KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => app.move_card_right(),
+        // Navigation (Vim + Arrows)
+        KeyCode::Char('h') | KeyCode::Left => app.prev_column(),
+        KeyCode::Char('l') | KeyCode::Right => app.next_column(),
+        KeyCode::Char('j') | KeyCode::Down => app.next_card(),
+        KeyCode::Char('k') | KeyCode::Up => app.prev_card(),
+        // Movement (Vim + Arrows)
         KeyCode::Char('J') => app.move_card_down(),
         KeyCode::Char('K') => app.move_card_up(),
         KeyCode::Char('H') => app.move_card_left(),
         KeyCode::Char('L') => app.move_card_right(),
+
         KeyCode::Char('<') | KeyCode::Char(',') => app.move_column_left(),
         KeyCode::Char('>') | KeyCode::Char('.') => app.move_column_right(),
         KeyCode::Char('d') => app.trigger_delete(),
@@ -47,8 +55,27 @@ pub fn handle_filter(app: &mut App, key: KeyEvent) {
 pub fn handle_view_card(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('v') => app.close_detail_view(),
+
+        // Basic Scroll
         KeyCode::Char('j') | KeyCode::Down => app.view_scroll_down(),
         KeyCode::Char('k') | KeyCode::Up => app.view_scroll_up(),
+
+        // Vim Movements
+        KeyCode::Char('g') => app.view_scroll_y = 0, // Top
+        KeyCode::Char('G') => app.view_scroll_y = u16::MAX, // Bottom (Ratatui handles clamping usually, or we need logic)
+        KeyCode::Home => app.view_scroll_y = 0,
+        KeyCode::End => app.view_scroll_y = u16::MAX,
+
+        // Page Up/Down (Ctrl+u / Ctrl+d)
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.view_scroll_y = app.view_scroll_y.saturating_sub(10);
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.view_scroll_y = app.view_scroll_y.saturating_add(10);
+        }
+        KeyCode::PageUp => app.view_scroll_y = app.view_scroll_y.saturating_sub(10),
+        KeyCode::PageDown => app.view_scroll_y = app.view_scroll_y.saturating_add(10),
+
         KeyCode::Char('o') => app.open_external_editor(),
         _ => {}
     }
@@ -95,97 +122,80 @@ pub fn handle_delete_confirmation(app: &mut App, key: KeyEvent) {
 /// Note: This differentiates between moving the cursor/cycling fields
 /// and actually typing text into the description.
 pub fn handle_editing(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc => {
-            let is_desc_editing = app
-                .edit_state
-                .as_ref()
-                .map(|s| s.focused_field == EditField::Description && s.description_edit_mode)
-                .unwrap_or(false);
+    let is_field_active = app
+        .edit_state
+        .as_ref()
+        .map(|s| s.is_editing_field)
+        .unwrap_or(false);
+    let focused = app.get_focused_field();
 
-            if is_desc_editing {
-                // Just leave text editing mode, stay in the modal
-                app.toggle_description_edit();
-            } else {
-                // Standard exit logic
-                if !app.is_edit_empty() {
-                    app.trigger_exit_modal();
-                } else {
-                    app.cancel_edit();
+    match key.code {
+        // --- 1. Global Modal Controls ---
+        KeyCode::Esc => {
+            if is_field_active {
+                // Exit Insert Mode -> Go back to Field Navigation
+                if let Some(state) = &mut app.edit_state {
+                    state.is_editing_field = false;
+                    state.description_edit_mode = false;
                 }
+            } else if !app.is_edit_empty() {
+                app.trigger_exit_modal();
+            } else {
+                app.cancel_edit();
             }
         }
         KeyCode::Enter => {
-            let focused_field = app.get_focused_field();
-            match focused_field {
-                Some(EditField::Description) => {
-                    let is_editing = app
-                        .edit_state
-                        .as_ref()
-                        .map(|s| s.description_edit_mode)
-                        .unwrap_or(false);
-                    if is_editing {
-                        app.edit_input_char('\n');
-                    } else {
-                        app.toggle_description_edit();
+            match focused {
+                Some(EditField::Tags) => app.open_selector(SelectorType::Tag),
+                Some(EditField::Category) => app.open_selector(SelectorType::Category),
+                _ => {
+                    // Toggle Insert Mode
+                    if let Some(state) = &mut app.edit_state {
+                        state.is_editing_field = !state.is_editing_field;
+                        // If entering description, enable multiline mode
+                        if state.focused_field == EditField::Description && state.is_editing_field {
+                            state.description_edit_mode = true;
+                        }
                     }
                 }
-                Some(EditField::Tags) => app.open_selector(crate::app::state::SelectorType::Tag),
-                Some(EditField::Category) => {
-                    app.open_selector(crate::app::state::SelectorType::Category)
-                }
-                _ => {
-                    app.cycle_edit_field(false);
-                }
-            }
-        }
-        KeyCode::Char('o') if key.modifiers == crossterm::event::KeyModifiers::NONE => {
-            let is_typing_desc = app
-                .edit_state
-                .as_ref()
-                .map(|s| s.focused_field == EditField::Description && s.description_edit_mode)
-                .unwrap_or(false);
-
-            if is_typing_desc {
-                app.edit_input_char('o');
-            } else if let Some(EditField::Description) = app.get_focused_field() {
-                app.open_external_editor();
-            } else {
-                app.edit_input_char('o');
             }
         }
         KeyCode::Tab => app.edit_input_tab(),
         KeyCode::BackTab => app.cycle_edit_field(true),
-        KeyCode::Up => {
-            let is_desc_editing = app
-                .edit_state
-                .as_ref()
-                .map(|s| s.focused_field == EditField::Description && s.description_edit_mode)
-                .unwrap_or(false);
-            if is_desc_editing {
+
+        // --- 2. Navigation Mode (Only when NOT editing text) ---
+        KeyCode::Char('j') | KeyCode::Down if !is_field_active => app.cycle_edit_field(false),
+        KeyCode::Char('k') | KeyCode::Up if !is_field_active => app.cycle_edit_field(true),
+
+        // FIX: 'o' shortcut only works in Navigation Mode AND on Description field
+        KeyCode::Char('o') if !is_field_active && focused == Some(EditField::Description) => {
+            app.open_external_editor();
+        }
+
+        // --- 3. Insert Mode (Only when editing text) ---
+        KeyCode::Up if is_field_active => {
+            // Only move cursor up if we are in the multi-line description
+            if focused == Some(EditField::Description) {
                 app.move_cursor_up();
-            } else {
-                app.cycle_edit_field(true);
             }
         }
-        KeyCode::Down => {
-            let is_desc_editing = app
-                .edit_state
-                .as_ref()
-                .map(|s| s.focused_field == EditField::Description && s.description_edit_mode)
-                .unwrap_or(false);
-            if is_desc_editing {
+        KeyCode::Down if is_field_active => {
+            if focused == Some(EditField::Description) {
                 app.move_cursor_down();
-            } else {
-                app.cycle_edit_field(false);
             }
         }
-        KeyCode::Left => app.move_cursor_left(),
-        KeyCode::Right => app.move_cursor_right(),
-        KeyCode::Home => app.move_cursor_home(),
-        KeyCode::End => app.move_cursor_end(),
-        KeyCode::Backspace => app.edit_input_backspace(),
-        KeyCode::Char(c) => app.edit_input_char(c),
+        KeyCode::Left if is_field_active => app.move_cursor_left(),
+        KeyCode::Right if is_field_active => app.move_cursor_right(),
+        KeyCode::Home if is_field_active => app.move_cursor_home(),
+        KeyCode::End if is_field_active => app.move_cursor_end(),
+
+        KeyCode::Backspace if is_field_active => app.edit_input_backspace(),
+
+        // FIX: Generic Char handler catches 'o' when typing
+        KeyCode::Char(c) if is_field_active => {
+            app.edit_input_char(c);
+        }
+
         _ => {}
     }
 }

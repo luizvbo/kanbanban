@@ -35,6 +35,9 @@ fn test_full_user_workflow() {
     process_event(&mut app, key(KeyCode::Char('n'))).unwrap(); // New Card
     assert_eq!(app.mode, InputMode::Editing);
 
+    // Press Enter to start editing the Title field (Vim-like behavior)
+    process_event(&mut app, key(KeyCode::Enter)).unwrap();
+
     // Type Title "Task 1"
     process_event(&mut app, key(KeyCode::Char('T'))).unwrap();
     process_event(&mut app, key(KeyCode::Char('a'))).unwrap();
@@ -42,6 +45,8 @@ fn test_full_user_workflow() {
     process_event(&mut app, key(KeyCode::Char('k'))).unwrap();
     process_event(&mut app, key(KeyCode::Char(' '))).unwrap();
     process_event(&mut app, key(KeyCode::Char('1'))).unwrap();
+    // Press Esc to exit Field Edit Mode
+    process_event(&mut app, key(KeyCode::Esc)).unwrap();
 
     // Esc (Trigger Exit Modal) -> Enter (Confirm Save)
     process_event(&mut app, key(KeyCode::Esc)).unwrap();

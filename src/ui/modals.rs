@@ -163,73 +163,88 @@ pub fn draw_detail_view(f: &mut Frame, app: &App) {
     let card = &col.cards[app.current_card_idx];
 
     let block = Block::default()
-        .title(format!(" {} ", card.title))
         .borders(Borders::ALL)
         .border_type(BorderType::Thick)
         .style(Style::default().bg(Color::Black));
-
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Meta (Category | Date)
-            Constraint::Length(1), // Tags
+            Constraint::Length(1), // Title
+            Constraint::Length(1), // Category + Tags
+            Constraint::Length(1), // Date
             Constraint::Length(1), // Separator
             Constraint::Min(1),    // Description
-            Constraint::Length(1), // Footer hint
+            Constraint::Length(1), // Footer
         ])
         .split(inner);
 
-    // 1. Meta Row
+    // 1. Title
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            &card.title,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .alignment(Alignment::Center),
+        chunks[0],
+    );
+
+    // 2. Category + Tags
     let mut meta_spans = Vec::new();
     if let Some(cat) = &card.category {
+        let cat_color = app.data.get_category_color(cat);
         meta_spans.push(Span::styled(
-            format!("PROJECT: {} ", cat),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            format!(" {} ", cat.to_uppercase()),
+            Style::default().fg(cat_color).add_modifier(Modifier::BOLD),
         ));
-        meta_spans.push(Span::raw(" | "));
+        meta_spans.push(Span::raw("  "));
     }
-    if let Some(date) = &card.due_date {
-        meta_spans.push(Span::styled(
-            format!("DUE: {} ", date),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    f.render_widget(Paragraph::new(Line::from(meta_spans)), chunks[0]);
-
-    // 2. Tags
-    let mut tag_spans = Vec::new();
     for tag in &card.tags {
         let color = app.data.get_tag_color(tag);
-        tag_spans.push(Span::styled(
+        meta_spans.push(Span::styled(
             format!(" #{} ", tag.name),
             Style::default().bg(color).fg(Color::Black),
         ));
-        tag_spans.push(Span::raw(" "));
+        meta_spans.push(Span::raw(" "));
     }
-    f.render_widget(Line::from(tag_spans), chunks[1]);
+    f.render_widget(
+        Line::from(meta_spans).alignment(Alignment::Center),
+        chunks[1],
+    );
 
-    // 3. Separator
-    f.render_widget(Block::default().borders(Borders::BOTTOM), chunks[2]);
+    // 3. Date
+    if let Some(date) = &card.due_date {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                format!("DUE: {}", date),
+                Style::default().fg(Color::Cyan),
+            ))
+            .alignment(Alignment::Center),
+            chunks[2],
+        );
+    }
 
-    // 4. Description (Scrollable)
+    // 4. Separator
+    f.render_widget(Block::default().borders(Borders::BOTTOM), chunks[3]);
+
+    // 5. Description
     let markdown = parse_markdown(&card.description);
     f.render_widget(
         Paragraph::new(markdown)
             .wrap(Wrap { trim: false })
             .scroll((app.view_scroll_y, 0)),
-        chunks[3],
+        chunks[4],
     );
 
-    // 5. Footer
+    // 6. Footer
     f.render_widget(
         Paragraph::new("j/k: Scroll | o: Open External | Esc: Close")
             .style(Style::default().fg(Color::Gray)),
-        chunks[4],
+        chunks[5],
     );
 }
 

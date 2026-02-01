@@ -81,7 +81,7 @@ mod tests {
     use crate::{
         app::{App, InputMode},
         domain::kanban::Card,
-        ui::draw,
+        ui::{draw, widgets::centered_fixed_rect},
     };
 
     fn create_app() -> App {
@@ -135,7 +135,7 @@ mod tests {
 
         // Assert Card
         assert!(buffer_contains(buffer, "Card X"));
-        assert!(buffer_contains(buffer, "Cat")); // Category
+        assert!(buffer_contains(buffer, "CAT")); // Category
     }
 
     #[test]
@@ -223,5 +223,15 @@ mod tests {
             terminal.backend().buffer(),
             "FILTER: urgent"
         ));
+    }
+
+    #[test]
+    fn test_centered_fixed_rect() {
+        let area = ratatui::layout::Rect::new(0, 0, 100, 50);
+        let centered = centered_fixed_rect(50, 10, area);
+
+        assert_eq!(centered.height, 10);
+        assert_eq!(centered.width, 50); // 50% of 100
+        assert_eq!(centered.y, 20); // (50 - 10) / 2
     }
 }

@@ -62,8 +62,10 @@ pub struct EditState {
     pub cursor_position: usize,
     pub scroll_x: u16,
     pub scroll_y: u16,
-    /// When true, Enter key inserts a newline. When false, Enter cycles fields.
+    // When true, Enter key inserts a newline. When false, Enter cycles fields.
     pub description_edit_mode: bool,
+    // Tracks if we are inside a field (Insert Mode)
+    pub is_editing_field: bool,
 }
 
 impl Default for EditState {
@@ -86,6 +88,7 @@ impl EditState {
             scroll_x: 0,
             scroll_y: 0,
             description_edit_mode: false,
+            is_editing_field: false,
         }
     }
 
@@ -102,6 +105,7 @@ impl EditState {
             scroll_x: 0,
             scroll_y: 0,
             description_edit_mode: false,
+            is_editing_field: false,
         }
     }
 
@@ -134,7 +138,7 @@ impl EditState {
 
     /// Calculates (x, y) coordinates for the terminal cursor.
     /// Necessary for multi-line description editing with proper wrapping.
-    pub fn get_cursor_position_2d(&self, _width: u16) -> (u16, u16) {
+    pub fn get_cursor_position_2d(&self, width: u16) -> (u16, u16) {
         let text = match self.focused_field {
             EditField::Title => &self.title,
             EditField::Category => &self.category,
@@ -143,27 +147,39 @@ impl EditState {
             EditField::Description => &self.description,
         };
 
+        // For single-line fields, just return length
         if self.focused_field != EditField::Description {
             return (self.cursor_position as u16, 0);
         }
 
+        // For Description: Calculate X/Y based on wrapping width
         let mut x = 0;
         let mut y = 0;
+        let max_width = width as usize;
 
         for (i, c) in text.char_indices() {
             if i == self.cursor_position {
-                return (x, y);
+                return (x as u16, y as u16);
             }
+
             if c == '\n' {
                 x = 0;
                 y += 1;
-            } else if c == '\t' {
-                x += 4;
             } else {
-                x += 1;
+                let char_width = if c == '\t' { 4 } else { 1 };
+
+                // Check for wrap BEFORE adding width
+                if x + char_width > max_width {
+                    x = 0;
+                    y += 1;
+                }
+
+                x += char_width;
             }
         }
-        (x, y)
+
+        // Handle cursor at the very end of text
+        (x as u16, y as u16)
     }
 
     pub fn move_cursor_up(&mut self) {
