@@ -922,33 +922,33 @@ impl App {
     }
 
     pub fn selector_confirm(&mut self) {
-        if let Some(selector) = &self.selector_state {
-            if let Some(edit_state) = &mut self.edit_state {
-                match selector.mode {
-                    SelectorType::Tag => {
-                        // Reconstruct Tag objects with colors
-                        let mut new_tags = Vec::new();
-                        for name in &selector.selected_items {
-                            let color = self
-                                .data
-                                .known_tags
-                                .iter()
-                                .find(|t| t.name == *name)
-                                .and_then(|t| t.color.clone());
-                            new_tags.push(Tag {
-                                name: name.clone(),
-                                color,
-                            });
-                        }
-                        edit_state.tags = new_tags;
+        if let Some(selector) = &self.selector_state
+            && let Some(edit_state) = &mut self.edit_state
+        {
+            match selector.mode {
+                SelectorType::Tag => {
+                    // Reconstruct Tag objects with colors
+                    let mut new_tags = Vec::new();
+                    for name in &selector.selected_items {
+                        let color = self
+                            .data
+                            .known_tags
+                            .iter()
+                            .find(|t| t.name == *name)
+                            .and_then(|t| t.color.clone());
+                        new_tags.push(Tag {
+                            name: name.clone(),
+                            color,
+                        });
                     }
-                    SelectorType::Category => {
-                        if let Some(first) = selector.selected_items.first() {
-                            edit_state.category = first.clone();
-                        } else if !selector.search_query.is_empty() {
-                            // Allow creating new category on confirm if list is empty but query exists
-                            edit_state.category = selector.search_query.clone();
-                        }
+                    edit_state.tags = new_tags;
+                }
+                SelectorType::Category => {
+                    if let Some(first) = selector.selected_items.first() {
+                        edit_state.category = first.clone();
+                    } else if !selector.search_query.is_empty() {
+                        // Allow creating new category on confirm if list is empty but query exists
+                        edit_state.category = selector.search_query.clone();
                     }
                 }
             }
@@ -1001,22 +1001,22 @@ impl App {
         }
 
         // CASE 2: Toggle Existing Item
-        if let Some((_, item)) = filtered.get(current_idx) {
-            if let Some(s) = &mut self.selector_state {
-                match mode {
-                    SelectorType::Tag => {
-                        if let Some(pos) = s.selected_items.iter().position(|x| x == &item.name) {
-                            s.selected_items.remove(pos);
-                        } else {
-                            s.selected_items.push(item.name.clone());
-                        }
-                    }
-                    SelectorType::Category => {
-                        s.selected_items.clear(); // Single select
+        if let Some((_, item)) = filtered.get(current_idx)
+            && let Some(s) = &mut self.selector_state
+        {
+            match mode {
+                SelectorType::Tag => {
+                    if let Some(pos) = s.selected_items.iter().position(|x| x == &item.name) {
+                        s.selected_items.remove(pos);
+                    } else {
                         s.selected_items.push(item.name.clone());
-                        // Optional: Close immediately on category select?
-                        // Let's keep it open to allow changing mind, consistent with tags.
                     }
+                }
+                SelectorType::Category => {
+                    s.selected_items.clear(); // Single select
+                    s.selected_items.push(item.name.clone());
+                    // Optional: Close immediately on category select?
+                    // Let's keep it open to allow changing mind, consistent with tags.
                 }
             }
         }
@@ -1097,10 +1097,10 @@ impl App {
     }
 
     pub fn selector_prev(&mut self) {
-        if let Some(s) = &mut self.selector_state {
-            if s.current_index > 0 {
-                s.current_index -= 1;
-            }
+        if let Some(s) = &mut self.selector_state
+            && s.current_index > 0
+        {
+            s.current_index -= 1;
         }
     }
 

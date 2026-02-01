@@ -166,7 +166,7 @@ pub fn draw_detail_view(f: &mut Frame, app: &App) {
         .title(format!(" {} ", card.title))
         .borders(Borders::ALL)
         .border_type(BorderType::Thick)
-        .style(Style::default().bg(Color::DarkGray));
+        .style(Style::default().bg(Color::Black));
 
     let inner = block.inner(area);
     f.render_widget(block, area);

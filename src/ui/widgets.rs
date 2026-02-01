@@ -60,11 +60,53 @@ pub fn parse_markdown(content: &str) -> Text<'_> {
 
     let mut current_line_spans = Vec::new();
     let mut style = Style::default();
+    let mut in_code_block = false;
 
     for event in parser {
         match event {
-            Event::Text(t) => current_line_spans.push(Span::styled(t.to_string(), style)),
+            // Normal Text
+            Event::Text(t) => {
+                if in_code_block {
+                    // Render code block content
+                    current_line_spans.push(Span::styled(
+                        t.to_string(),
+                        Style::default().fg(Color::LightCyan),
+                    ));
+                } else {
+                    current_line_spans.push(Span::styled(t.to_string(), style));
+                }
+            }
 
+            // Inline Code (e.g., `variable`)
+            Event::Code(t) => {
+                current_line_spans.push(Span::styled(
+                    t.to_string(),
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            // Code Blocks (```rust ...)
+            Event::Start(Tag::CodeBlock(_)) => {
+                // Flush current line before starting block
+                if !current_line_spans.is_empty() {
+                    lines.push(Line::from(current_line_spans.clone()));
+                    current_line_spans.clear();
+                }
+                in_code_block = true;
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                // Flush the last line of the code block
+                if !current_line_spans.is_empty() {
+                    lines.push(Line::from(current_line_spans.clone()));
+                    current_line_spans.clear();
+                }
+                in_code_block = false;
+                lines.push(Line::from("")); // Add spacing after block
+            }
+
+            // Styling
             Event::Start(Tag::Emphasis) => style = style.add_modifier(Modifier::ITALIC),
             Event::Start(Tag::Strong) => style = style.add_modifier(Modifier::BOLD),
             Event::Start(Tag::Heading { .. }) => {
@@ -74,6 +116,8 @@ pub fn parse_markdown(content: &str) -> Text<'_> {
                 }
                 style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
             }
+
+            // Lists
             Event::Start(Tag::List(_)) => {
                 if !current_line_spans.is_empty() {
                     lines.push(Line::from(current_line_spans.clone()));
@@ -88,6 +132,7 @@ pub fn parse_markdown(content: &str) -> Text<'_> {
                 current_line_spans.push(Span::raw("• "));
             }
 
+            // Reset Styles on End
             Event::End(TagEnd::Emphasis) => style = style.remove_modifier(Modifier::ITALIC),
             Event::End(TagEnd::Strong) => style = style.remove_modifier(Modifier::BOLD),
             Event::End(TagEnd::Heading(_)) => {
@@ -106,15 +151,18 @@ pub fn parse_markdown(content: &str) -> Text<'_> {
                     current_line_spans.clear();
                 }
             }
-            // FIX: Handle Paragraph End to render double line breaks correctly
             Event::End(TagEnd::Paragraph) => {
                 if !current_line_spans.is_empty() {
                     lines.push(Line::from(current_line_spans.clone()));
                     current_line_spans.clear();
                 }
-                lines.push(Line::from("")); // Add spacing between paragraphs
+                // Only add spacing if we aren't inside a code block (which handles its own newlines usually)
+                if !in_code_block {
+                    lines.push(Line::from(""));
+                }
             }
 
+            // Line Breaks
             Event::SoftBreak | Event::HardBreak => {
                 lines.push(Line::from(current_line_spans.clone()));
                 current_line_spans.clear();

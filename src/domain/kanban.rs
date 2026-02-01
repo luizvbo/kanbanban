@@ -192,10 +192,10 @@ impl KanbanData {
             return Tag::parse_color_string(c);
         }
         // 2. Check global known_tags
-        if let Some(global) = self.known_tags.iter().find(|t| t.name == tag.name) {
-            if let Some(c) = &global.color {
-                return Tag::parse_color_string(c);
-            }
+        if let Some(global) = self.known_tags.iter().find(|t| t.name == tag.name)
+            && let Some(c) = &global.color
+        {
+            return Tag::parse_color_string(c);
         }
         // 3. Fallback
         Color::White
@@ -206,10 +206,9 @@ impl KanbanData {
             .known_categories
             .iter()
             .find(|c| c.name == category_name)
+            && let Some(c) = &cat.color
         {
-            if let Some(c) = &cat.color {
-                return Tag::parse_color_string(c);
-            }
+            return Tag::parse_color_string(c);
         }
         Color::White
     }
