@@ -5,9 +5,44 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+
+/// Wraps text based on character width (ignoring word boundaries).
+/// This ensures the visual text matches the cursor logic in EditState.
+pub fn soft_wrap(text: &str, max_width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width = 0;
+
+    for c in text.chars() {
+        // Handle explicit newlines
+        if c == '\n' {
+            lines.push(current_line);
+            current_line = String::new();
+            current_width = 0;
+            continue;
+        }
+
+        // Calculate char width (Tabs = 4, others = 1)
+        let w = if c == '\t' { 4 } else { 1 };
+
+        // Check if adding this character exceeds the width
+        if current_width + w > max_width {
+            lines.push(current_line);
+            current_line = String::new();
+            current_width = 0;
+        }
+
+        current_line.push(c);
+        current_width += w;
+    }
+
+    // Push the final line (even if empty, to represent the cursor at the end)
+    lines.push(current_line);
+    lines
+}
 
 pub fn draw_input_modal(f: &mut Frame, title: &str, input: &str) {
     // Use fixed height of 3 rows (Border + Text + Border)
@@ -442,9 +477,11 @@ pub fn draw_edit_popup(f: &mut Frame, app: &mut App) {
         );
         f.render_widget(date_widget, chunks[3]);
 
-        // 5. Description - FIX FOR ISSUE #1: Ensure Multi-line Text Area behavior
-        let (_cursor_col, cursor_row) =
-            state.get_cursor_position_2d(chunks[4].width.saturating_sub(2));
+        // 5. Description
+        let desc_width = chunks[4].width.saturating_sub(2) as usize; // Inner width
+
+        // Calculate cursor based on CHAR wrapping
+        let (_cursor_col, cursor_row) = state.get_cursor_position_2d(desc_width as u16);
 
         // Scroll logic
         let desc_height = chunks[4].height.saturating_sub(2);
@@ -454,14 +491,9 @@ pub fn draw_edit_popup(f: &mut Frame, app: &mut App) {
             state.scroll_y = cursor_row;
         }
 
-        let desc_content = if state.description.is_empty() && !state.description_edit_mode {
-            Text::from(Span::styled(
-                "No description provided...",
-                Style::default().fg(Color::Gray),
-            ))
-        } else {
-            Text::from(state.description.as_str())
-        };
+        // Manually wrap content so it matches cursor logic exactly
+        let wrapped_lines = soft_wrap(&state.description, desc_width);
+        let desc_content = wrapped_lines.join("\n");
 
         let (desc_border_style, desc_title) = if state.focused_field == EditField::Description {
             if state.description_edit_mode {
@@ -469,18 +501,21 @@ pub fn draw_edit_popup(f: &mut Frame, app: &mut App) {
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
-                    " Description (EDITING - Esc to Stop) ",
+                    " Description (EDITING) ",
                 )
             } else {
                 (
                     Style::default().fg(Color::Yellow),
-                    " Description (SELECTED - Enter to Edit) ",
+                    " Description (SELECTED) ",
                 )
             }
         } else {
             (Style::default(), " Description ")
         };
 
+        // FIX: Removed .wrap(Wrap { trim: false })
+        // We rely on soft_wrap to handle line breaks at the exact character limit.
+        // This prevents Ratatui from doing "Word Wrapping" which desyncs the cursor.
         let desc_widget = Paragraph::new(desc_content)
             .block(
                 Block::default()
@@ -488,7 +523,6 @@ pub fn draw_edit_popup(f: &mut Frame, app: &mut App) {
                     .title(desc_title)
                     .border_style(desc_border_style),
             )
-            .wrap(Wrap { trim: false })
             .scroll((state.scroll_y, 0));
 
         f.render_widget(desc_widget, chunks[4]);

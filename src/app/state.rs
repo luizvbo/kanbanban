@@ -182,6 +182,41 @@ impl EditState {
         (x as u16, y as u16)
     }
 
+    /// Wraps text based on character width (ignoring word boundaries).
+    /// This ensures the visual text matches the cursor logic in EditState.
+    pub fn soft_wrap(text: &str, max_width: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut current_line = String::new();
+        let mut current_width = 0;
+
+        for c in text.chars() {
+            // Handle explicit newlines
+            if c == '\n' {
+                lines.push(current_line);
+                current_line = String::new();
+                current_width = 0;
+                continue;
+            }
+
+            // Calculate char width (Tabs = 4, others = 1)
+            let w = if c == '\t' { 4 } else { 1 };
+
+            // Check if adding this character exceeds the width
+            if current_width + w > max_width {
+                lines.push(current_line);
+                current_line = String::new();
+                current_width = 0;
+            }
+
+            current_line.push(c);
+            current_width += w;
+        }
+
+        // Push the final line (even if empty, to represent the cursor at the end)
+        lines.push(current_line);
+        lines
+    }
+
     pub fn move_cursor_up(&mut self) {
         if self.focused_field != EditField::Description {
             return;

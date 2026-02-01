@@ -293,25 +293,35 @@ mod tests {
     #[test]
 
     fn test_vim_edit_mode_transitions() {
-        let mut app = create_app(); // Use the robust create_app
-        app.start_new_card(); // Mode = Editing, Field = Title
+        let mut app = create_app();
+        app.start_new_card();
+        // Initial State: Mode=Editing, Field=Title, is_editing_field=false
 
         // 1. Try typing 'j' - Should NOT type, should stay in nav
-        // (Note: Title is empty initially)
-        let _ = handle_editing(&mut app, key_event(KeyCode::Char('j')));
+        handle_editing(&mut app, key_event(KeyCode::Char('j')));
         assert_eq!(app.edit_state.as_ref().unwrap().title, "");
         assert!(!app.edit_state.as_ref().unwrap().is_editing_field);
 
         // 2. Press Enter - Enter Insert Mode
-        let _ = handle_editing(&mut app, key_event(KeyCode::Enter));
-        assert!(app.edit_state.as_ref().unwrap().is_editing_field);
+        // Explicitly ensure we are on a text field
+        app.edit_state.as_mut().unwrap().focused_field = EditField::Title;
+        handle_editing(&mut app, key_event(KeyCode::Enter));
+
+        // ASSERTION: Check the flag directly
+        assert!(
+            app.edit_state.as_ref().unwrap().is_editing_field,
+            "Enter should enable insert mode"
+        );
 
         // 3. Type 'j' - Should type now
-        let _ = handle_editing(&mut app, key_event(KeyCode::Char('j')));
+        handle_editing(&mut app, key_event(KeyCode::Char('j')));
         assert_eq!(app.edit_state.as_ref().unwrap().title, "j");
 
         // 4. Press Esc - Exit Insert Mode
-        let _ = handle_editing(&mut app, key_event(KeyCode::Esc));
-        assert!(!app.edit_state.as_ref().unwrap().is_editing_field);
+        handle_editing(&mut app, key_event(KeyCode::Esc));
+        assert!(
+            !app.edit_state.as_ref().unwrap().is_editing_field,
+            "Esc should disable insert mode"
+        );
     }
 }

@@ -11,14 +11,13 @@ use ratatui::{
 
 // Helper to safely truncate string by visual width (char count)
 fn safe_truncate(s: &str, max_width: usize) -> (String, String) {
-    let mut width = 0;
     let mut split_idx = 0;
 
-    for (i, c) in s.char_indices() {
+    for (width, (i, c)) in s.char_indices().enumerate() {
+        // for (i, c) in s.char_indices() {
         if width >= max_width {
             break;
         }
-        width += 1;
         split_idx = i + c.len_utf8();
     }
 
@@ -271,12 +270,7 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
     let mut chunk_idx = 0;
 
     // --- 1. Title Only (Yellow/Bold) ---
-    let title_span = Span::styled(
-        &card.title,
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    );
+    let title_span = Span::styled(&card.title, Style::default().add_modifier(Modifier::BOLD));
     f.render_widget(
         Paragraph::new(title_span).wrap(Wrap { trim: true }),
         chunks[chunk_idx],
@@ -373,7 +367,6 @@ pub fn draw_card(f: &mut Frame, card: &Card, area: Rect, is_selected: bool, data
             lines_to_draw.push(Line::from(current_line_spans.clone()));
             current_line_spans.clear();
             line_count += 1;
-            current_width = 0;
 
             if line_count >= 2 {
                 break;

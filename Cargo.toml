@@ -1,8 +1,19 @@
 [package]
 name = "kanbanban"
+description = "A fast, modal, terminal-based Kanban board."
+authors = ["Luiz Otavio Vilas Boas Oliveira <luiz.vbo@gmail.com>"]
+license = "MIT"
+readme = "README.md"
 version = "0.3.0"
 edition = "2024"
 repository = "https://github.com/luizvbo/kanbanban"
+keywords = ["kanban", "tui", "productivity", "terminal", "cli"]
+categories = ["command-line-utilities", "visualization"]
+exclude = [
+    "*.log",
+    ".github/*",
+    "tests/*"
+]
 
 [dependencies]
 anyhow = "1.0.100"

@@ -127,13 +127,14 @@ pub fn handle_editing(app: &mut App, key: KeyEvent) {
         .as_ref()
         .map(|s| s.is_editing_field)
         .unwrap_or(false);
+
     let focused = app.get_focused_field();
 
     match key.code {
-        // --- 1. Global Modal Controls ---
+        // --- 1. Exit / Cancel ---
         KeyCode::Esc => {
             if is_field_active {
-                // Exit Insert Mode -> Go back to Field Navigation
+                // Exit Insert Mode -> Return to Navigation
                 if let Some(state) = &mut app.edit_state {
                     state.is_editing_field = false;
                     state.description_edit_mode = false;
@@ -144,37 +145,48 @@ pub fn handle_editing(app: &mut App, key: KeyEvent) {
                 app.cancel_edit();
             }
         }
+
+        // --- 2. Enter (Toggle Mode OR Insert Newline) ---
         KeyCode::Enter => {
+            // Special Case: If already editing Description, Enter = Newline
+            if is_field_active && focused == Some(EditField::Description) {
+                app.edit_input_char('\n');
+                return;
+            }
+
+            // Otherwise: Toggle Mode or Open Selector
             match focused {
                 Some(EditField::Tags) => app.open_selector(SelectorType::Tag),
                 Some(EditField::Category) => app.open_selector(SelectorType::Category),
                 _ => {
-                    // Toggle Insert Mode
+                    // Toggle Insert Mode for Title, Date, Description
                     if let Some(state) = &mut app.edit_state {
                         state.is_editing_field = !state.is_editing_field;
-                        // If entering description, enable multiline mode
-                        if state.focused_field == EditField::Description && state.is_editing_field {
-                            state.description_edit_mode = true;
+
+                        // Sync description specific flag
+                        if state.focused_field == EditField::Description {
+                            state.description_edit_mode = state.is_editing_field;
                         }
                     }
                 }
             }
         }
+
+        // --- 3. Navigation (Only when NOT editing a field) ---
+        KeyCode::Char('j') | KeyCode::Down if !is_field_active => app.cycle_edit_field(false),
+        KeyCode::Char('k') | KeyCode::Up if !is_field_active => app.cycle_edit_field(true),
         KeyCode::Tab => app.edit_input_tab(),
         KeyCode::BackTab => app.cycle_edit_field(true),
 
-        // --- 2. Navigation Mode (Only when NOT editing text) ---
-        KeyCode::Char('j') | KeyCode::Down if !is_field_active => app.cycle_edit_field(false),
-        KeyCode::Char('k') | KeyCode::Up if !is_field_active => app.cycle_edit_field(true),
-
-        // FIX: 'o' shortcut only works in Navigation Mode AND on Description field
+        // --- 4. Shortcuts (Navigation Mode Only) ---
         KeyCode::Char('o') if !is_field_active && focused == Some(EditField::Description) => {
             app.open_external_editor();
         }
 
-        // --- 3. Insert Mode (Only when editing text) ---
+        // --- 5. Insert Mode Actions (Typing & Cursor) ---
+
+        // Up/Down: Move Cursor if in Description, otherwise ignore (or cycle if we wanted)
         KeyCode::Up if is_field_active => {
-            // Only move cursor up if we are in the multi-line description
             if focused == Some(EditField::Description) {
                 app.move_cursor_up();
             }
@@ -184,14 +196,17 @@ pub fn handle_editing(app: &mut App, key: KeyEvent) {
                 app.move_cursor_down();
             }
         }
+
+        // Left/Right/Home/End: Standard Cursor Movement
         KeyCode::Left if is_field_active => app.move_cursor_left(),
         KeyCode::Right if is_field_active => app.move_cursor_right(),
         KeyCode::Home if is_field_active => app.move_cursor_home(),
         KeyCode::End if is_field_active => app.move_cursor_end(),
 
+        // Deletion
         KeyCode::Backspace if is_field_active => app.edit_input_backspace(),
 
-        // FIX: Generic Char handler catches 'o' when typing
+        // Typing Characters
         KeyCode::Char(c) if is_field_active => {
             app.edit_input_char(c);
         }
