@@ -1,331 +1,237 @@
 pub mod board;
-pub mod categories;
-pub mod datepicker;
-pub mod markdown;
 pub mod modals;
-pub mod overview;
-pub mod settings;
+pub mod widgets;
 
-use crate::app::{App, ViewMode};
+use crate::app::{App, InputMode};
+use crate::ui::board::draw_board;
+use crate::ui::modals::{
+    draw_column_delete_modal, draw_delete_confirmation, draw_detail_view, draw_edit_popup,
+    draw_exit_confirmation, draw_help_popup, draw_input_modal, draw_selector,
+};
+use crate::ui::widgets::draw_footer;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    widgets::Clear,
 };
 
-pub fn ui(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
+    f.render_widget(Clear, f.area());
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(1),
             Constraint::Min(0),
-            Constraint::Length(3),
+            Constraint::Length(1),
         ])
         .split(f.area());
 
-    render_header(f, app, chunks[0]);
+    let project_name = &app.current_project().name;
+    let header = Line::from(vec![
+        Span::styled(
+            " KANBANBAN ",
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Project: "),
+        Span::styled(
+            project_name,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(header), chunks[0]);
 
-    match app.view_mode {
-        ViewMode::Board => board::render(f, app, chunks[1]),
-        ViewMode::Overview => overview::render(f, app, chunks[1]),
-        ViewMode::Settings => settings::render(f, app, chunks[1]),
-        ViewMode::BoardSelector => board::render_selector(f, app, chunks[1]),
-        ViewMode::CategoryManager => categories::render(f, app, chunks[1]),
+    draw_board(f, app, chunks[1]);
+    draw_footer(f, app, chunks[2]);
+
+    match app.mode {
+        InputMode::Help => draw_help_popup(f, app),
+        InputMode::Editing => draw_edit_popup(f, app),
+        InputMode::Selector => {
+            draw_edit_popup(f, app);
+            draw_selector(f, app);
+        }
+        InputMode::ExitingModal => {
+            draw_edit_popup(f, app);
+            draw_exit_confirmation(f);
+        }
+        InputMode::DeleteConfirmation => draw_delete_confirmation(f),
+        InputMode::ProjectRename => draw_input_modal(f, " Rename Board ", &app.prompt_input),
+        InputMode::ColumnRename => draw_input_modal(f, " Rename Column ", &app.prompt_input),
+        InputMode::ColumnNew => draw_input_modal(f, " New Column Title ", &app.prompt_input),
+        InputMode::ColumnDelete => draw_column_delete_modal(f, app),
+        InputMode::ViewCard => draw_detail_view(f, app),
+        _ => {}
     }
-
-    render_footer(f, app, chunks[2]);
-
-    if let Some(modal) = &app.active_modal {
-        modals::render(f, app, modal);
-    }
-}
-
-fn render_header(f: &mut Frame, app: &App, area: Rect) {
-    let board_name = app
-        .boards
-        .get(app.active_board_index)
-        .map(|b| b.name.as_str())
-        .unwrap_or("No Board");
-
-    let titles = vec![
-        "Board (b)",
-        "Overview (v)",
-        "Settings (s)",
-        "Categories (C)",
-    ];
-    let index = match app.view_mode {
-        ViewMode::Board | ViewMode::BoardSelector => 0,
-        ViewMode::Overview => 1,
-        ViewMode::Settings => 2,
-        ViewMode::CategoryManager => 3,
-    };
-
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" Kanbanban - {board_name} ")),
-        )
-        .select(index)
-        .highlight_style(Style::default().fg(Color::Yellow));
-
-    f.render_widget(tabs, area);
-}
-
-fn render_footer(f: &mut Frame, _app: &App, area: Rect) {
-    let help = Paragraph::new("q: Quit | h/j/k/l: Nav | H/L: Move Task | n: New Task | e: Edit | c: New Col | s: Settings")
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(help, area);
-}
-
-pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app::{App, OverviewTab, ViewMode};
-    use crate::db::Database;
-    use chrono::{Duration, Local};
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-    use tempfile::NamedTempFile;
+    use ratatui::{Terminal, backend::TestBackend};
+    use std::path::PathBuf;
 
-    fn setup_app() -> App<'static> {
-        let file = NamedTempFile::new().unwrap();
-        let db = Database::new(file.path()).unwrap();
-        App::new(db).unwrap()
+    use crate::{
+        app::{App, InputMode},
+        domain::kanban::Card,
+        ui::{draw, widgets::centered_fixed_rect},
+    };
+
+    fn create_app() -> App {
+        let mut app = App::new(PathBuf::from("dummy")).unwrap();
+        // Setup simple state
+        app.data.projects[0].name = "Test Project".into();
+        app.data.projects[0].columns[0].title = "Col A".into();
+        app.data.projects[0].columns[0].cards.clear();
+
+        app.data.projects[0].columns[0].cards.push(Card {
+            title: "Card X".into(),
+            description: "Desc".into(),
+            category: Some("Cat".into()),
+            tags: vec![],
+            due_date: None,
+        });
+        app
+    }
+
+    // Helper to search buffer for string
+    fn buffer_contains(buffer: &ratatui::buffer::Buffer, s: &str) -> bool {
+        for y in 0..buffer.area.height {
+            let line_width = buffer.area.width;
+            let mut line_string = String::new();
+            for x in 0..line_width {
+                line_string.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            if line_string.contains(s) {
+                return true;
+            }
+        }
+        false
     }
 
     #[test]
-    fn test_ui_render_board() {
-        let mut app = setup_app();
+    fn test_draw_main_board() {
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = create_app();
 
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
 
         let buffer = terminal.backend().buffer();
-        assert!(buffer.content.iter().any(|c| c.symbol() == "K")); // Kanbanban
-        assert!(buffer.content.iter().any(|c| c.symbol() == "R")); // Ready
-        assert!(buffer.content.iter().any(|c| c.symbol() == "D")); // Doing
+
+        // Assert Title (Updated to match new header)
+        assert!(buffer_contains(buffer, "KANBANBAN"));
+        assert!(buffer_contains(buffer, "Project: Test Project"));
+
+        // Assert Column
+        assert!(buffer_contains(buffer, "Col A"));
+
+        // Assert Card
+        assert!(buffer_contains(buffer, "Card X"));
+        assert!(buffer_contains(buffer, "CAT")); // Category
     }
 
     #[test]
-    fn test_ui_render_board_tasks() {
-        let mut app = setup_app();
-        let bid = app.boards[0].id;
-        let cid = app.columns[0].id;
-
-        // Overdue task
-        let overdue = Local::now().naive_local() - Duration::days(2);
-        app.db
-            .create_task(
-                bid,
-                cid,
-                "Overdue".into(),
-                "".into(),
-                Some(overdue.format("%Y-%m-%d %H:%M:%S").to_string()),
-                None,
-            )
-            .unwrap();
-
-        // Due today
-        let today = Local::now().naive_local();
-        app.db
-            .create_task(
-                bid,
-                cid,
-                "Today".into(),
-                "".into(),
-                Some(today.format("%Y-%m-%d %H:%M:%S").to_string()),
-                None,
-            )
-            .unwrap();
-
-        app.refresh_data().unwrap();
-
-        let backend = TestBackend::new(100, 20);
+    fn test_draw_help_popup() {
+        let backend = TestBackend::new(100, 40); // Increased height for larger help menu
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        let mut app = create_app();
+        app.mode = InputMode::Help;
 
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer();
-        let content: String = buffer.content.iter().map(|c| c.symbol()).collect();
 
-        assert!(content.contains("Overdue"));
-        assert!(content.contains("Today"));
-        assert!(content.contains("Due Today"));
+        // Assert Title (Updated to match new modal title)
+        assert!(buffer_contains(buffer, "Help Menu"));
+        assert!(buffer_contains(buffer, "Navigation"));
     }
 
     #[test]
-    fn test_ui_render_settings() {
-        let mut app = setup_app();
-        app.view_mode = ViewMode::Settings;
-
-        let backend = TestBackend::new(100, 20);
+    fn test_draw_edit_modal() {
+        let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = create_app();
+        app.start_new_card(); // Enters Editing mode
 
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
-
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("Column"));
-        assert!(content_str.contains("Management"));
+
+        assert!(buffer_contains(buffer, "Edit"));
+        assert!(buffer_contains(buffer, "Title"));
+        assert!(buffer_contains(buffer, "Category"));
+        assert!(buffer_contains(buffer, "Description"));
     }
 
     #[test]
-    fn test_ui_render_modal_task() {
-        let mut app = setup_app();
-        app.open_new_task_modal();
-
-        let backend = TestBackend::new(100, 20);
+    fn test_draw_all_modals() {
+        let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = create_app();
 
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        // 1. Delete Confirmation
+        app.mode = InputMode::DeleteConfirmation;
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        assert!(buffer_contains(
+            terminal.backend().buffer(),
+            "Delete Confirmation"
+        ));
 
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("Task"));
-        assert!(content_str.contains("Details"));
+        // 2. Column Delete
+        app.mode = InputMode::ColumnDelete;
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        assert!(buffer_contains(
+            terminal.backend().buffer(),
+            "DELETE COLUMN"
+        ));
+
+        // 3. Rename Project
+        app.mode = InputMode::ProjectRename;
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        assert!(buffer_contains(terminal.backend().buffer(), "Rename Board"));
+
+        // 4. Tag Selector
+        app.start_new_card();
+        app.open_selector(crate::app::state::SelectorType::Tag); // Sets mode to TagSelection
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        assert!(buffer_contains(terminal.backend().buffer(), "Select Tags"));
+
+        // 5. Detail View
+        app.mode = InputMode::ViewCard;
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        // Should show the card title from create_app ("Card X")
+        assert!(buffer_contains(terminal.backend().buffer(), "Card X"));
     }
 
     #[test]
-    fn test_ui_render_modal_column() {
-        let mut app = setup_app();
-        app.open_new_column_modal();
-
+    fn test_draw_filter_bar() {
         let backend = TestBackend::new(100, 20);
         let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = create_app();
 
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
+        app.filter_query = "urgent".into();
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
 
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("New Column"));
+        // Assert new footer format
+        assert!(buffer_contains(
+            terminal.backend().buffer(),
+            "FILTER: urgent"
+        ));
     }
 
     #[test]
-    fn test_ui_render_modal_category() {
-        let mut app = setup_app();
-        app.open_new_category_modal();
+    fn test_centered_fixed_rect() {
+        let area = ratatui::layout::Rect::new(0, 0, 100, 50);
+        let centered = centered_fixed_rect(50, 10, area);
 
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("Category Details"));
-    }
-
-    #[test]
-    fn test_ui_render_modal_board() {
-        let mut app = setup_app();
-        app.open_new_board_modal();
-
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("New Board"));
-    }
-
-    #[test]
-    fn test_ui_render_overview_logs() {
-        let mut app = setup_app();
-        app.view_mode = ViewMode::Overview;
-        app.overview_state.tab = OverviewTab::Logs;
-
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("Audit Logs"));
-    }
-
-    #[test]
-    fn test_ui_render_overview_charts() {
-        let mut app = setup_app();
-        app.view_mode = ViewMode::Overview;
-        app.overview_state.tab = OverviewTab::Charts;
-
-        // Add data for chart
-        app.db.create_category("C1".into(), "".into()).unwrap();
-        let bid = app.boards[0].id;
-        let cid = app.columns[0].id;
-        let cat_id = app.db.data.categories[0].id;
-        app.db
-            .create_task(bid, cid, "T".into(), "".into(), None, Some(cat_id))
-            .unwrap();
-        app.refresh_data().unwrap();
-
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("Tasks by Category"));
-    }
-
-    #[test]
-    fn test_ui_render_category_manager() {
-        let mut app = setup_app();
-        app.view_mode = ViewMode::CategoryManager;
-        app.db
-            .create_category("Work".into(), "#FFF".into())
-            .unwrap();
-        app.refresh_data().unwrap();
-
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("Category Manager"));
-        assert!(content_str.contains("Work"));
-    }
-
-    #[test]
-    fn test_ui_render_board_selector() {
-        let mut app = setup_app();
-        app.view_mode = ViewMode::BoardSelector;
-
-        let backend = TestBackend::new(100, 20);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal.draw(|f| ui(f, &mut app)).unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content_str: String = buffer.content.iter().map(|c| c.symbol()).collect();
-        assert!(content_str.contains("Select Board"));
+        assert_eq!(centered.height, 10);
+        assert_eq!(centered.width, 50); // 50% of 100
+        assert_eq!(centered.y, 20); // (50 - 10) / 2
     }
 }
