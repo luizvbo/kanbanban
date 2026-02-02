@@ -26,60 +26,23 @@ This document outlines how to contribute to **Kanbanban** and the process for re
 
 ## Release Process (Maintainers Only)
 
-To release a new version of Kanbanban, follow these steps:
+We use `cargo-release` to automate the release process and `cargo-dist` to build binaries.
 
-### 1. Bump the version
+### 1. Run the release command
 
-Update the version in `Cargo.toml`. We follow [SemVer](https://semver.org/).
-
-```bash
-# For a major breaking change (e.g., 0.3.0 -> 1.0.0)
-cargo set-version 1.0.0
-
-# For a new feature (e.g., 1.0.0 -> 1.1.0)
-cargo set-version 1.1.0
-
-# For a bug fix (e.g., 1.0.0 -> 1.0.1)
-cargo set-version 1.0.1
-```
-
-### 2. Update the Changelog
-
-Document the changes in `CHANGELOG.md`.
-
-### 3. Synchronize cargo-dist
-
-If you've added new dependencies or changed the version significantly, ensure the CI/CD configuration is up to date:
+This command will bump the version, update the lockfile, commit the changes, create a git tag, push to GitHub, and publish the crate to crates.io.
 
 ```bash
-cargo dist init
+# Replace 'patch', 'minor', or 'major' as needed
+cargo release patch --execute
 ```
 
-### 4. Tag the release
+### 2. Verify CI/CD
 
-The GitHub Actions (via `cargo-dist`) are triggered by Git tags. **The tag must start with `v`**.
+Pushing the tag automatically triggers the GitHub Action.
 
-```bash
-git add .
-git commit -m "chore: release v1.0.0"
-git tag v1.0.0
-```
-
-### 5. Push to GitHub
-
-Push the commit and the tag. This will trigger the `release.yml` workflow which creates the GitHub Release and uploads binaries for Windows, Linux, and macOS.
-
-```bash
-git push origin main --tags
-```
-
-### 6. Publish to Crates.io
-
-Finally, publish the library to the community:
-
-```bash
-cargo publish
-```
+- Go to **GitHub > Actions** to monitor the "Release" workflow.
+- Once finished, a new **GitHub Release** will be created with binaries and installers attached.
 
 ## Architecture Overview
 
