@@ -332,6 +332,7 @@ impl App {
             use std::fs::OpenOptions;
             if let Ok(mut file) = OpenOptions::new().append(true).open(&temp_file) {
                 let _ = writeln!(file, "\n[Edited Externally]");
+                let _ = file.sync_all();
             }
         }
 
