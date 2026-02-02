@@ -296,7 +296,8 @@ impl App {
 
         use std::io::Write;
         let mut temp_file = std::env::temp_dir();
-        temp_file.push("kanbanban_edit.md");
+        let filename = format!("kanbanban_edit_{}.md", std::process::id());
+        temp_file.push(filename);
 
         if let Ok(mut file) = std::fs::File::create(&temp_file) {
             let _ = file.write_all(initial_content.as_bytes());
