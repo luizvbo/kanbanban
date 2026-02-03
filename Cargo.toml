@@ -17,10 +17,8 @@ exclude = [
 
 [dependencies]
 anyhow = "1.0.100"
-chrono = "0.4.43"
 clap = { version = "4.5.55", features = ["derive"] }
 crossterm = "0.29.0"
-directories = "6.0.0"
 pulldown-cmark = "0.13.0"
 ratatui = "0.30.0"
 serde = { version = "1.0.228", features = ["derive"] }
