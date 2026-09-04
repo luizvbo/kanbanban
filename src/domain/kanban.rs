@@ -31,10 +31,14 @@ impl Tag {
             "cyan" => Color::Cyan,
             "white" => Color::White,
             "gray" => Color::Gray,
+            "darkgray" => Color::DarkGray,
             "black" => Color::Black,
             "lightred" => Color::LightRed,
             "lightgreen" => Color::LightGreen,
             "lightblue" => Color::LightBlue,
+            "lightyellow" => Color::LightYellow,
+            "lightmagenta" => Color::LightMagenta,
+            "lightcyan" => Color::LightCyan,
             "orange" => Color::Rgb(255, 165, 0),
             _ => Color::White,
         }
@@ -133,30 +137,6 @@ impl Default for KanbanData {
 }
 
 impl KanbanData {
-    pub fn current_project_mut(&mut self, index: usize) -> Option<&mut Project> {
-        self.projects.get_mut(index)
-    }
-
-    pub fn move_card(
-        &mut self,
-        project_idx: usize,
-        from_col: usize,
-        to_col: usize,
-        card_idx: usize,
-    ) -> Option<usize> {
-        let project = self.projects.get_mut(project_idx)?;
-
-        // Validation logic moved here
-        if from_col >= project.columns.len() || to_col >= project.columns.len() {
-            return None;
-        }
-
-        let card = project.columns[from_col].cards.remove(card_idx);
-        project.columns[to_col].cards.push(card);
-
-        Some(project.columns[to_col].cards.len() - 1) // Return new index
-    }
-
     pub fn load(path: &PathBuf) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
@@ -165,15 +145,12 @@ impl KanbanData {
         if content.trim().is_empty() {
             return Ok(Self::default());
         }
-        match serde_yaml::from_str::<KanbanData>(&content) {
-            Ok(mut data) => {
-                if data.known_tags.is_empty() {
-                    data.known_tags = Self::default().known_tags;
-                }
-                Ok(data)
-            }
-            Err(_) => Ok(Self::default()),
+        let mut data = serde_yaml::from_str::<KanbanData>(&content)
+            .with_context(|| format!("Failed to parse data file {:?}", path))?;
+        if data.known_tags.is_empty() {
+            data.known_tags = Self::default().known_tags;
         }
+        Ok(data)
     }
 
     pub fn save(&self, path: &PathBuf) -> Result<()> {
