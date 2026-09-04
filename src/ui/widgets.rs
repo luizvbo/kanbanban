@@ -264,35 +264,3 @@ pub fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         footer_chunks[2],
     );
 }
-
-pub fn draw_filter_bar(f: &mut Frame, app: &App) {
-    let area = f.area();
-    let filter_area = Rect {
-        x: area.x,
-        y: area.height - 4,
-        width: area.width,
-        height: 1,
-    };
-
-    let prefix = if app.mode == InputMode::Filter {
-        "FILTER: "
-    } else {
-        "FILTER (Active): "
-    };
-    let style = if app.mode == InputMode::Filter {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::Green)
-    };
-
-    let text = Line::from(vec![
-        Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
-        Span::raw(&app.filter_query),
-    ]);
-
-    f.render_widget(ratatui::widgets::Clear, filter_area);
-    f.render_widget(
-        Paragraph::new(text).style(Style::default().bg(Color::Black)),
-        filter_area,
-    );
-}

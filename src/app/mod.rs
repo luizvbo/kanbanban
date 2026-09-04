@@ -4,7 +4,10 @@ use crate::app::state::{EditField, EditState, SelectorState, SelectorType};
 use crate::domain::kanban::{Column, KanbanData, Project, Tag};
 use anyhow::Result;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+
+static EDITOR_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Defines the possible interaction states of the application.
 /// Used by the event handler to determine how to interpret key presses
@@ -296,7 +299,8 @@ impl App {
 
         use std::io::Write;
         let mut temp_file = std::env::temp_dir();
-        let filename = format!("kanbanban_edit_{}.md", std::process::id());
+        let unique = EDITOR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let filename = format!("kanbanban_edit_{}_{}.md", std::process::id(), unique);
         temp_file.push(filename);
 
         if let Ok(mut file) = std::fs::File::create(&temp_file) {
@@ -1129,7 +1133,10 @@ mod tests {
 
     // Helper to create a test app in memory
     fn create_test_app() -> App {
-        let mut app = App::new(PathBuf::from("dummy.yaml")).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("kbb.yaml");
+        std::mem::forget(tmp); // keep the temp directory alive for the test
+        let mut app = App::new(path).unwrap();
         // Clear default data for clean testing
         app.data.projects[0].columns.clear();
         app.data.projects[0].columns.push(Column {

@@ -48,10 +48,12 @@ mod tests {
 
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use std::path::PathBuf;
 
     fn create_app() -> App {
-        let mut app = App::new(PathBuf::from("non_existent_test_file.yaml")).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("kbb.yaml");
+        std::mem::forget(tmp); // keep the temp directory alive for the test
+        let mut app = App::new(path).unwrap();
 
         // Force clean state regardless of file load result
         app.data.projects.clear();

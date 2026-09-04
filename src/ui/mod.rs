@@ -76,7 +76,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 #[cfg(test)]
 mod tests {
     use ratatui::{Terminal, backend::TestBackend};
-    use std::path::PathBuf;
 
     use crate::{
         app::{App, InputMode},
@@ -85,7 +84,10 @@ mod tests {
     };
 
     fn create_app() -> App {
-        let mut app = App::new(PathBuf::from("dummy")).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("kbb.yaml");
+        std::mem::forget(tmp); // keep the temp directory alive for the test
+        let mut app = App::new(path).unwrap();
         // Setup simple state
         app.data.projects[0].name = "Test Project".into();
         app.data.projects[0].columns[0].title = "Col A".into();
