@@ -49,10 +49,30 @@ impl Tag {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Card {
     pub title: String,
+    #[serde(default)]
     pub description: String,
     pub category: Option<String>,
+    #[serde(default)]
     pub tags: Vec<Tag>,
     pub due_date: Option<String>,
+}
+
+impl Card {
+    /// Returns true when the card matches the lowercase filter `query_lower`.
+    /// Checks the title, category, and tag names. This is the single source of
+    /// truth shared by the app logic and the UI so filtering can never desync
+    /// between what is rendered and what actions operate on.
+    pub fn matches_query(&self, query_lower: &str) -> bool {
+        self.title.to_lowercase().contains(query_lower)
+            || self
+                .category
+                .as_ref()
+                .is_some_and(|cat| cat.to_lowercase().contains(query_lower))
+            || self
+                .tags
+                .iter()
+                .any(|t| t.name.to_lowercase().contains(query_lower))
+    }
 }
 
 /// A vertical list containing cards.
@@ -75,6 +95,7 @@ pub struct Project {
 /// Root structure for YAML persistence.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KanbanData {
+    #[serde(default)]
     pub projects: Vec<Project>,
     /// Global registry of tags and their colors to ensure
     /// consistency across the whole board.
@@ -147,15 +168,35 @@ impl KanbanData {
         }
         let mut data = serde_yaml::from_str::<KanbanData>(&content)
             .with_context(|| format!("Failed to parse data file {:?}", path))?;
+
+        // Backfill empty/missing sections so the app never has to handle a
+        // board with no projects or empty registries (all index-based accessors
+        // assume at least one project exists).
+        let defaults = Self::default();
+        if data.projects.is_empty() {
+            data.projects = defaults.projects;
+        }
         if data.known_tags.is_empty() {
-            data.known_tags = Self::default().known_tags;
+            data.known_tags = defaults.known_tags;
+        }
+        if data.known_categories.is_empty() {
+            data.known_categories = defaults.known_categories;
         }
         Ok(data)
     }
 
     pub fn save(&self, path: &PathBuf) -> Result<()> {
         let content = serde_yaml::to_string(self).context("Failed to serialize data")?;
-        fs::write(path, content).context("Failed to write data file")?;
+        // Write to a temp file in the same directory, then atomically rename it
+        // over the target. A plain fs::write can leave a truncated, unparseable
+        // board file if the process crashes mid-write.
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("kbb.yaml");
+        let tmp_path = path.with_file_name(format!("{}.tmp", file_name));
+        fs::write(&tmp_path, content).context("Failed to write data file")?;
+        fs::rename(&tmp_path, path).context("Failed to finalize data file")?;
         Ok(())
     }
 

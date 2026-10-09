@@ -1,4 +1,27 @@
 use crate::domain::kanban::{Card, Tag};
+use unicode_width::UnicodeWidthChar;
+
+/// Terminal display width of a single character.
+/// Tabs expand to 4 columns; control characters take no space;
+/// wide (CJK/emoji) characters take 2 columns.
+fn char_width(c: char) -> usize {
+    if c == '\t' {
+        4
+    } else {
+        UnicodeWidthChar::width(c).unwrap_or(0)
+    }
+}
+
+/// Snaps `pos` down to the nearest UTF-8 char boundary in `text`.
+/// All cursor arithmetic must go through char boundaries: indexing or
+/// inserting at a non-boundary position panics in Rust.
+fn snap_to_char_boundary(text: &str, mut pos: usize) -> usize {
+    pos = pos.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum EditField {
@@ -136,8 +159,24 @@ impl EditState {
         self.title.trim().is_empty() && self.description.trim().is_empty() && self.tags.is_empty()
     }
 
+    /// Ensures `cursor_position` is within bounds and on a UTF-8 char
+    /// boundary for the currently focused field. Callers that slice or
+    /// insert into the field text rely on this invariant.
+    pub fn snap_cursor_boundary(&mut self) {
+        let text = match self.focused_field {
+            EditField::Title => &self.title,
+            EditField::Category => &self.category,
+            EditField::Tags => return,
+            EditField::DueDate => &self.due_date,
+            EditField::Description => &self.description,
+        };
+        self.cursor_position = snap_to_char_boundary(text, self.cursor_position);
+    }
+
     /// Calculates (x, y) coordinates for the terminal cursor.
     /// Necessary for multi-line description editing with proper wrapping.
+    /// Note: positions are terminal display columns (wide chars count as 2),
+    /// not byte offsets.
     pub fn get_cursor_position_2d(&self, width: u16) -> (u16, u16) {
         let text = match self.focused_field {
             EditField::Title => &self.title,
@@ -147,51 +186,72 @@ impl EditState {
             EditField::Description => &self.description,
         };
 
-        // For single-line fields, just return length
+        // For single-line fields, return the display width before the cursor
         if self.focused_field != EditField::Description {
-            return (self.cursor_position as u16, 0);
+            let mut x: usize = 0;
+            for (i, c) in text.char_indices() {
+                if i >= self.cursor_position {
+                    break;
+                }
+                x += char_width(c);
+            }
+            return (x.min(u16::MAX as usize) as u16, 0);
         }
 
         // For Description: Calculate X/Y based on wrapping width
-        let mut x = 0;
-        let mut y = 0;
+        let mut x: usize = 0;
+        let mut y: usize = 0;
         let max_width = width as usize;
 
         for (i, c) in text.char_indices() {
-            if i == self.cursor_position {
-                return (x as u16, y as u16);
+            if i >= self.cursor_position {
+                break;
             }
 
             if c == '\n' {
                 x = 0;
                 y += 1;
             } else {
-                let char_width = if c == '\t' { 4 } else { 1 };
+                let w = char_width(c);
 
                 // Check for wrap BEFORE adding width
-                if x + char_width > max_width {
+                if x + w > max_width {
                     x = 0;
                     y += 1;
                 }
 
-                x += char_width;
+                x += w;
             }
         }
 
-        // Handle cursor at the very end of text
-        (x as u16, y as u16)
+        (
+            x.min(u16::MAX as usize) as u16,
+            y.min(u16::MAX as usize) as u16,
+        )
+    }
+
+    /// Byte offset of the `n`-th char boundary inside `text`
+    /// (i.e. converts a character column into a byte position).
+    fn byte_pos_for_char_col(text: &str, col: usize) -> usize {
+        text.char_indices()
+            .nth(col)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len())
     }
 
     pub fn move_cursor_up(&mut self) {
         if self.focused_field != EditField::Description {
             return;
         }
+        self.snap_cursor_boundary();
 
         let text = &self.description;
         let pos = self.cursor_position;
 
         let current_line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let col_offset = pos - current_line_start;
+        // Column measured in characters, not bytes: multi-byte chars must not
+        // make the resulting position land mid-char.
+        let col_offset = text[current_line_start..pos].chars().count();
 
         if current_line_start == 0 {
             self.cursor_position = 0;
@@ -203,22 +263,23 @@ impl EditState {
             .rfind('\n')
             .map(|i| i + 1)
             .unwrap_or(0);
-        let prev_line_len = prev_line_end - prev_line_start;
+        let prev_line = &text[prev_line_start..prev_line_end];
 
-        let new_col = std::cmp::min(col_offset, prev_line_len);
-        self.cursor_position = prev_line_start + new_col;
+        let new_col = std::cmp::min(col_offset, prev_line.chars().count());
+        self.cursor_position = prev_line_start + Self::byte_pos_for_char_col(prev_line, new_col);
     }
 
     pub fn move_cursor_down(&mut self) {
         if self.focused_field != EditField::Description {
             return;
         }
+        self.snap_cursor_boundary();
 
         let text = &self.description;
         let pos = self.cursor_position;
 
         let current_line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let col_offset = pos - current_line_start;
+        let col_offset = text[current_line_start..pos].chars().count();
 
         let next_newline = text[pos..].find('\n').map(|i| pos + i);
 
@@ -233,10 +294,11 @@ impl EditState {
                 .find('\n')
                 .map(|i| next_line_start + i)
                 .unwrap_or(text.len());
-            let next_line_len = next_line_end - next_line_start;
+            let next_line = &text[next_line_start..next_line_end];
 
-            let new_col = std::cmp::min(col_offset, next_line_len);
-            self.cursor_position = next_line_start + new_col;
+            let new_col = std::cmp::min(col_offset, next_line.chars().count());
+            self.cursor_position =
+                next_line_start + Self::byte_pos_for_char_col(next_line, new_col);
         } else {
             self.cursor_position = text.len();
         }

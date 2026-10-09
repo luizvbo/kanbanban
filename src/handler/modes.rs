@@ -37,9 +37,15 @@ pub fn handle_normal(app: &mut App, key: KeyEvent) {
         KeyCode::Char('/') => app.start_filter(),
         KeyCode::Esc => app.clear_filter(),
         KeyCode::Char('v') => app.open_detail_view(),
-        KeyCode::Char('o') => app.open_external_editor(),
         _ => {}
     }
+}
+
+/// Only plain (or Shift-modified) characters count as text input.
+/// Without this guard, Ctrl/Alt combinations like Ctrl+C would insert
+/// a literal character into the input instead of being ignored.
+fn is_text_input(key: &KeyEvent) -> bool {
+    key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT
 }
 
 pub fn handle_filter(app: &mut App, key: KeyEvent) {
@@ -47,7 +53,7 @@ pub fn handle_filter(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => app.stop_filter(),
         KeyCode::Esc => app.clear_filter(),
         KeyCode::Backspace => app.filter_input_backspace(),
-        KeyCode::Char(c) => app.filter_input_char(c),
+        KeyCode::Char(c) if is_text_input(&key) => app.filter_input_char(c),
         _ => {}
     }
 }
@@ -92,11 +98,12 @@ pub fn handle_selector(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => app.selector_confirm(), // Save & Close
         KeyCode::Enter => app.selector_toggle_or_create(),
-        KeyCode::Delete | KeyCode::Char('x') => app.selector_delete_item(), // Added Delete support
+        KeyCode::Delete => app.selector_delete_item(),
         KeyCode::Down => app.selector_next(),
         KeyCode::Up => app.selector_prev(),
         KeyCode::Backspace => app.selector_backspace(),
-        KeyCode::Char(c) => app.selector_input_char(c),
+        // 'x' must reach the search query, so it is not a delete shortcut.
+        KeyCode::Char(c) if is_text_input(&key) => app.selector_input_char(c),
         _ => {}
     }
 }
@@ -207,7 +214,7 @@ pub fn handle_editing(app: &mut App, key: KeyEvent) {
         KeyCode::Backspace if is_field_active => app.edit_input_backspace(),
 
         // Typing Characters
-        KeyCode::Char(c) if is_field_active => {
+        KeyCode::Char(c) if is_field_active && is_text_input(&key) => {
             app.edit_input_char(c);
         }
 
@@ -225,7 +232,7 @@ pub fn handle_column_project_rename(app: &mut App, key: KeyEvent) {
         },
         KeyCode::Esc => app.cancel_prompt(),
         KeyCode::Backspace => app.prompt_input_backspace(),
-        KeyCode::Char(c) => app.prompt_input_char(c),
+        KeyCode::Char(c) if is_text_input(&key) => app.prompt_input_char(c),
         _ => {}
     }
 }

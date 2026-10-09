@@ -30,7 +30,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ])
         .split(f.area());
 
-    let project_name = &app.current_project().name;
+    // Defensive: a hand-edited file could still yield an empty project list.
+    let project_name = app
+        .data
+        .projects
+        .get(app.current_project_idx)
+        .map(|p| p.name.as_str())
+        .unwrap_or("Untitled");
     let header = Line::from(vec![
         Span::styled(
             " KANBANBAN ",

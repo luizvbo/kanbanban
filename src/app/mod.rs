@@ -9,6 +9,17 @@ use std::time::Instant;
 
 static EDITOR_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Builds the external editor command. `$EDITOR` may contain arguments
+/// (e.g. "code --wait" or "emacs -nw"), so it is split into program + args
+/// instead of being used verbatim as a binary name.
+fn build_editor_command(editor: &str, file: &std::path::Path) -> Option<std::process::Command> {
+    let mut parts = editor.split_whitespace();
+    let program = parts.next()?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(parts).arg(file);
+    Some(cmd)
+}
+
 /// Defines the possible interaction states of the application.
 /// Used by the event handler to determine how to interpret key presses
 /// and by the UI to determine which modals to render.
@@ -115,11 +126,17 @@ impl App {
     // --- Data Access Helpers ---
 
     /// Returns a reference to the project currently being viewed.
+    ///
+    /// # Panics
+    /// Panics if `data.projects` is empty. This invariant is upheld by
+    /// `KanbanData::load` and `KanbanData::default`, which both guarantee
+    /// at least one project exists.
     pub fn current_project(&self) -> &Project {
         &self.data.projects[self.current_project_idx]
     }
 
     /// Returns a mutable reference to the project currently being viewed.
+    /// See [`Self::current_project`] for the non-empty invariant.
     pub fn current_project_mut(&mut self) -> &mut Project {
         &mut self.data.projects[self.current_project_idx]
     }
@@ -135,6 +152,36 @@ impl App {
                 self.status_message = Some(format!("Error saving: {}", e));
                 self.status_time = Some(Instant::now());
             }
+        }
+    }
+
+    /// Returns true when the currently selected card exists and is visible
+    /// (i.e. not hidden by the active filter). Card-scoped actions must not
+    /// operate on an invisible selection — that would let users delete or move
+    /// a card they cannot see.
+    fn selected_card_visible(&self) -> bool {
+        self.current_project()
+            .columns
+            .get(self.current_col_idx)
+            .and_then(|c| c.cards.get(self.current_card_idx))
+            .is_some_and(|card| self.card_matches_filter(card))
+    }
+
+    /// If the selected card is filtered out, moves the selection to the first
+    /// matching (visible) card in the column. No-op when nothing matches.
+    fn snap_selection_to_visible(&mut self) {
+        let Some(col) = self.current_project().columns.get(self.current_col_idx) else {
+            return;
+        };
+        if col
+            .cards
+            .get(self.current_card_idx)
+            .is_some_and(|c| self.card_matches_filter(c))
+        {
+            return;
+        }
+        if let Some(idx) = col.cards.iter().position(|c| self.card_matches_filter(c)) {
+            self.current_card_idx = idx;
         }
     }
 
@@ -160,6 +207,8 @@ impl App {
 
     pub fn stop_filter(&mut self) {
         self.mode = InputMode::Normal;
+        // The filter stays applied: keep the selection on a visible card.
+        self.snap_selection_to_visible();
     }
 
     pub fn clear_filter(&mut self) {
@@ -180,19 +229,7 @@ impl App {
         if self.filter_query.is_empty() {
             return true;
         }
-        let q = self.filter_query.to_lowercase();
-        if card.title.to_lowercase().contains(&q) {
-            return true;
-        }
-        if let Some(cat) = &card.category
-            && cat.to_lowercase().contains(&q)
-        {
-            return true;
-        }
-        if card.tags.iter().any(|t| t.name.to_lowercase().contains(&q)) {
-            return true;
-        }
-        false
+        card.matches_query(&self.filter_query.to_lowercase())
     }
 
     // --- Navigation (Column/Card) ---
@@ -202,6 +239,7 @@ impl App {
         if len > 0 {
             self.current_col_idx = (self.current_col_idx + 1) % len;
             self.clamp_card_selection();
+            self.snap_selection_to_visible();
         }
     }
 
@@ -214,19 +252,37 @@ impl App {
                 self.current_col_idx -= 1;
             }
             self.clamp_card_selection();
+            self.snap_selection_to_visible();
         }
     }
 
+    /// Moves the selection to the next card that matches the active filter
+    /// (filtered-out cards are skipped so they can never be selected).
     pub fn next_card(&mut self) {
-        let col = &self.current_project().columns[self.current_col_idx];
-        if !col.cards.is_empty() && self.current_card_idx + 1 < col.cards.len() {
-            self.current_card_idx += 1;
+        let Some(col) = self.current_project().columns.get(self.current_col_idx) else {
+            return;
+        };
+        let mut idx = self.current_card_idx + 1;
+        while idx < col.cards.len() && !self.card_matches_filter(&col.cards[idx]) {
+            idx += 1;
+        }
+        if idx < col.cards.len() {
+            self.current_card_idx = idx;
         }
     }
 
+    /// Moves the selection to the previous card that matches the active filter.
     pub fn prev_card(&mut self) {
-        if self.current_card_idx > 0 {
-            self.current_card_idx -= 1;
+        let Some(col) = self.current_project().columns.get(self.current_col_idx) else {
+            return;
+        };
+        let mut idx = self.current_card_idx.min(col.cards.len());
+        while idx > 0 {
+            idx -= 1;
+            if self.card_matches_filter(&col.cards[idx]) {
+                self.current_card_idx = idx;
+                return;
+            }
         }
     }
 
@@ -234,7 +290,10 @@ impl App {
     /// MUST be called whenever columns are swapped, cards are moved, or
     /// the filter query is updated.
     fn clamp_card_selection(&mut self) {
-        let col = &self.current_project().columns[self.current_col_idx];
+        let Some(col) = self.current_project().columns.get(self.current_col_idx) else {
+            self.current_card_idx = 0;
+            return;
+        };
         if col.cards.is_empty() {
             self.current_card_idx = 0;
         } else if self.current_card_idx >= col.cards.len() {
@@ -245,8 +304,9 @@ impl App {
     // --- Detail View ---
 
     pub fn open_detail_view(&mut self) {
-        let col = &self.current_project().columns[self.current_col_idx];
-        if !col.cards.is_empty() {
+        // Only open when the selection points at a real, visible card
+        // (guards against empty columns and filtered-out selections).
+        if self.selected_card_visible() {
             self.view_scroll_y = 0;
             self.mode = InputMode::ViewCard;
         }
@@ -257,7 +317,7 @@ impl App {
     }
 
     pub fn view_scroll_down(&mut self) {
-        self.view_scroll_y += 1;
+        self.view_scroll_y = self.view_scroll_y.saturating_add(1);
     }
 
     pub fn view_scroll_up(&mut self) {
@@ -290,26 +350,58 @@ impl App {
                 .map(|s| s.description.clone())
                 .unwrap_or_default()
         } else {
-            let col = &self.current_project().columns[self.current_col_idx];
-            if col.cards.is_empty() {
+            let Some(col) = self.current_project().columns.get(self.current_col_idx) else {
                 return;
-            }
-            col.cards[self.current_card_idx].description.clone()
+            };
+            let Some(card) = col.cards.get(self.current_card_idx) else {
+                return;
+            };
+            card.description.clone()
         };
 
         use std::io::Write;
+        // Create the temp file with O_EXCL semantics: a predictable name in the
+        // world-writable temp dir must never follow a pre-existing symlink, and
+        // on Unix the file must be readable only by the owner (card contents
+        // may be sensitive).
         let mut temp_file = std::env::temp_dir();
-        let unique = EDITOR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let filename = format!("kanbanban_edit_{}_{}.md", std::process::id(), unique);
-        temp_file.push(filename);
+        let mut file = None;
+        for _ in 0..16 {
+            let unique = EDITOR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            temp_file.push(format!(
+                "kanbanban_edit_{}_{}.md",
+                std::process::id(),
+                unique
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_file)
+            {
+                Ok(f) => {
+                    file = Some(f);
+                    break;
+                }
+                Err(_) => {
+                    temp_file.pop();
+                    continue;
+                }
+            }
+        }
 
-        if let Ok(mut file) = std::fs::File::create(&temp_file) {
-            let _ = file.write_all(initial_content.as_bytes());
-        } else {
+        let Some(mut file) = file else {
             self.status_message = Some("Failed to create temp file".into());
             self.status_time = Some(Instant::now());
             return;
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
         }
+        let _ = file.write_all(initial_content.as_bytes());
+        drop(file);
 
         // TUI Suspension block (not compiled during unit tests)
         #[cfg(not(test))]
@@ -318,17 +410,24 @@ impl App {
                 cursor, execute,
                 terminal::{EnterAlternateScreen, LeaveAlternateScreen},
             };
-            use std::process::Command;
 
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
             let _ = crossterm::terminal::disable_raw_mode();
             let _ = execute!(std::io::stdout(), LeaveAlternateScreen, cursor::Show);
-            let _ = Command::new(&editor).arg(&temp_file).status();
+            let spawn_result =
+                build_editor_command(&editor, &temp_file).and_then(|mut c| c.status().ok());
             let _ = execute!(std::io::stdout(), EnterAlternateScreen, cursor::Hide);
             let _ = crossterm::terminal::enable_raw_mode();
 
             // Signal main loop to clear artifacts
             self.should_redraw = true;
+
+            if spawn_result.is_none() {
+                self.status_message = Some(format!("Failed to launch editor: {editor}"));
+                self.status_time = Some(Instant::now());
+                let _ = std::fs::remove_file(&temp_file);
+                return;
+            }
         }
 
         #[cfg(test)]
@@ -350,8 +449,12 @@ impl App {
             } else {
                 let idx = self.current_card_idx;
                 let col_idx = self.current_col_idx;
-                self.current_project_mut().columns[col_idx].cards[idx].description = content;
-                self.save_with_feedback();
+                if let Some(col) = self.current_project_mut().columns.get_mut(col_idx)
+                    && let Some(card) = col.cards.get_mut(idx)
+                {
+                    card.description = content;
+                    self.save_with_feedback();
+                }
             }
         }
         let _ = std::fs::remove_file(temp_file);
@@ -365,9 +468,10 @@ impl App {
     }
 
     pub fn confirm_new_column(&mut self) {
-        if !self.prompt_input.trim().is_empty() {
+        let title = self.prompt_input.trim().to_string();
+        if !title.is_empty() {
             let new_col = Column {
-                title: self.prompt_input.clone(),
+                title,
                 cards: Vec::new(),
                 scroll_offset: 0,
             };
@@ -380,20 +484,21 @@ impl App {
     }
 
     pub fn start_rename_column(&mut self) {
-        if self.current_project().columns.is_empty() {
+        let Some(col) = self.current_project().columns.get(self.current_col_idx) else {
             return;
-        }
-        self.prompt_input = self.current_project().columns[self.current_col_idx]
-            .title
-            .clone();
+        };
+        self.prompt_input = col.title.clone();
         self.mode = InputMode::ColumnRename;
     }
 
     pub fn confirm_rename_column(&mut self) {
-        if !self.prompt_input.trim().is_empty() {
+        let title = self.prompt_input.trim().to_string();
+        if !title.is_empty() {
             let idx = self.current_col_idx;
-            self.current_project_mut().columns[idx].title = self.prompt_input.clone();
-            self.save_with_feedback();
+            if let Some(col) = self.current_project_mut().columns.get_mut(idx) {
+                col.title = title;
+                self.save_with_feedback();
+            }
         }
         self.mode = InputMode::Normal;
     }
@@ -409,7 +514,7 @@ impl App {
         let idx = self.current_col_idx;
         let project = self.current_project_mut();
 
-        if !project.columns.is_empty() {
+        if idx < project.columns.len() {
             project.columns.remove(idx);
             if idx >= project.columns.len() {
                 if project.columns.is_empty() {
@@ -454,8 +559,9 @@ impl App {
     }
 
     pub fn confirm_rename_project(&mut self) {
-        if !self.prompt_input.trim().is_empty() {
-            self.current_project_mut().name = self.prompt_input.clone();
+        let name = self.prompt_input.trim().to_string();
+        if !name.is_empty() {
+            self.current_project_mut().name = name;
             self.save_with_feedback();
         }
         self.mode = InputMode::Normal;
@@ -469,8 +575,13 @@ impl App {
         let card_idx = self.current_card_idx;
         let card = {
             let project = self.current_project_mut();
+            // Validate both columns before removing: the card must never be
+            // detached from its column without a destination.
+            if from_col >= project.columns.len() || to_col >= project.columns.len() {
+                return;
+            }
             let from_column = &mut project.columns[from_col];
-            if from_column.cards.is_empty() {
+            if card_idx >= from_column.cards.len() {
                 return;
             }
             from_column.cards.remove(card_idx)
@@ -478,23 +589,34 @@ impl App {
 
         {
             let project = self.current_project_mut();
-            project.columns[to_col].cards.push(card);
+            let Some(to_column) = project.columns.get_mut(to_col) else {
+                return;
+            };
+            to_column.cards.push(card);
         }
 
         self.current_col_idx = to_col;
-        let project = self.current_project();
-        let new_len = project.columns[to_col].cards.len();
+        let new_len = self
+            .current_project()
+            .columns
+            .get(to_col)
+            .map(|c| c.cards.len())
+            .unwrap_or(0);
         self.current_card_idx = if new_len > 0 { new_len - 1 } else { 0 };
         self.save_with_feedback();
     }
 
     pub fn move_card_up(&mut self) {
+        if !self.selected_card_visible() {
+            return;
+        }
         let col_idx = self.current_col_idx;
         let card_idx = self.current_card_idx;
-        let project = self.current_project_mut();
-        let col = &mut project.columns[col_idx];
+        let Some(col) = self.current_project_mut().columns.get_mut(col_idx) else {
+            return;
+        };
 
-        if card_idx > 0 && !col.cards.is_empty() {
+        if card_idx > 0 {
             col.cards.swap(card_idx, card_idx - 1);
             self.current_card_idx -= 1;
             self.save_with_feedback();
@@ -502,12 +624,16 @@ impl App {
     }
 
     pub fn move_card_down(&mut self) {
+        if !self.selected_card_visible() {
+            return;
+        }
         let col_idx = self.current_col_idx;
         let card_idx = self.current_card_idx;
-        let project = self.current_project_mut();
-        let col = &mut project.columns[col_idx];
+        let Some(col) = self.current_project_mut().columns.get_mut(col_idx) else {
+            return;
+        };
 
-        if !col.cards.is_empty() && card_idx + 1 < col.cards.len() {
+        if card_idx + 1 < col.cards.len() {
             col.cards.swap(card_idx, card_idx + 1);
             self.current_card_idx += 1;
             self.save_with_feedback();
@@ -516,7 +642,7 @@ impl App {
 
     pub fn move_card_left(&mut self) {
         let current_col_idx = self.current_col_idx;
-        if current_col_idx == 0 {
+        if current_col_idx == 0 || !self.selected_card_visible() {
             return;
         }
         self.move_card_internal(current_col_idx, current_col_idx - 1);
@@ -525,7 +651,7 @@ impl App {
     pub fn move_card_right(&mut self) {
         let current_col_idx = self.current_col_idx;
         let num_cols = self.current_project().columns.len();
-        if current_col_idx + 1 >= num_cols {
+        if current_col_idx + 1 >= num_cols || !self.selected_card_visible() {
             return;
         }
         self.move_card_internal(current_col_idx, current_col_idx + 1);
@@ -534,8 +660,7 @@ impl App {
     // --- Card Deletion ---
 
     pub fn trigger_delete(&mut self) {
-        let col = &self.current_project().columns[self.current_col_idx];
-        if !col.cards.is_empty() {
+        if self.selected_card_visible() {
             self.mode = InputMode::DeleteConfirmation;
         }
     }
@@ -543,12 +668,17 @@ impl App {
     pub fn confirm_delete(&mut self) {
         let col_idx = self.current_col_idx;
         let card_idx = self.current_card_idx;
-        let project = self.current_project_mut();
-        let col = &mut project.columns[col_idx];
-
-        if !col.cards.is_empty() {
+        let mut removed = false;
+        if let Some(col) = self.current_project_mut().columns.get_mut(col_idx)
+            && card_idx < col.cards.len()
+        {
             col.cards.remove(card_idx);
+            removed = true;
+        }
+
+        if removed {
             self.clamp_card_selection();
+            self.snap_selection_to_visible();
             self.save_with_feedback();
         }
         self.mode = InputMode::Normal;
@@ -565,14 +695,29 @@ impl App {
     // --- Editing (Delegates to EditState) ---
 
     pub fn start_new_card(&mut self) {
+        // A card has nowhere to go when the project has no columns:
+        // opening the editor would just panic on save.
+        if self.current_project().columns.is_empty() {
+            self.status_message = Some("Create a column first (press 'c')".into());
+            self.status_time = Some(Instant::now());
+            return;
+        }
         self.edit_state = Some(EditState::new());
         self.mode = InputMode::Editing;
     }
 
     pub fn start_edit_card(&mut self) {
-        let col = &self.current_project().columns[self.current_col_idx];
+        let Some(col) = self.current_project().columns.get(self.current_col_idx) else {
+            // No columns at all: surface the hint instead of doing nothing.
+            self.start_new_card();
+            return;
+        };
         if col.cards.is_empty() {
             self.start_new_card();
+            return;
+        }
+        // Never open the editor on a card hidden by the active filter.
+        if !self.selected_card_visible() {
             return;
         }
         if let Some(card) = col.cards.get(self.current_card_idx) {
@@ -599,16 +744,22 @@ impl App {
 
             {
                 let project = self.current_project_mut();
-                let col = &mut project.columns[col_idx];
-                if is_new {
-                    col.cards.push(new_card);
-                } else if card_idx < col.cards.len() {
-                    col.cards[card_idx] = new_card;
+                if let Some(col) = project.columns.get_mut(col_idx) {
+                    if is_new {
+                        col.cards.push(new_card);
+                    } else if card_idx < col.cards.len() {
+                        col.cards[card_idx] = new_card;
+                    }
                 }
             }
 
             if is_new {
-                let len = self.current_project().columns[col_idx].cards.len();
+                let len = self
+                    .current_project()
+                    .columns
+                    .get(col_idx)
+                    .map(|c| c.cards.len())
+                    .unwrap_or(0);
                 if len > 0 {
                     self.current_card_idx = len - 1;
                 }
@@ -642,6 +793,10 @@ impl App {
                 return;
             }
 
+            // The cursor may sit on a non-char boundary if text was edited
+            // externally; inserting there would panic.
+            state.snap_cursor_boundary();
+
             let text = match state.focused_field {
                 EditField::Title => &mut state.title,
                 EditField::Category => &mut state.category,
@@ -664,6 +819,7 @@ impl App {
     pub fn edit_input_tab(&mut self) {
         if let Some(state) = &mut self.edit_state {
             if state.focused_field == EditField::Description && state.description_edit_mode {
+                state.snap_cursor_boundary();
                 let text = &mut state.description;
                 if state.cursor_position >= text.len() {
                     text.push_str("  ");
@@ -743,7 +899,11 @@ impl App {
             state.cursor_position = text_len;
             state.scroll_x = 0;
             state.scroll_y = 0;
-            state.description_edit_mode = false;
+            // Keep insert-mode consistent with the field: cycling into the
+            // Description while editing must leave text input enabled,
+            // otherwise keystrokes are silently dropped.
+            state.description_edit_mode =
+                state.is_editing_field && state.focused_field == EditField::Description;
         }
     }
 
@@ -785,6 +945,7 @@ impl App {
 
     pub fn move_cursor_right(&mut self) {
         if let Some(state) = &mut self.edit_state {
+            state.snap_cursor_boundary();
             let text = match state.focused_field {
                 EditField::Title => &state.title,
                 EditField::Category => &state.category,
@@ -793,30 +954,20 @@ impl App {
                 EditField::Description => &state.description,
             };
 
-            if let Some((idx, _)) = text
+            // Move to the next char boundary (byte offsets must never land
+            // inside a multi-byte char).
+            state.cursor_position = text
                 .char_indices()
-                .find(|(i, _)| *i == state.cursor_position)
-            {
-                let mut iter = text.char_indices();
-                while let Some((i, _)) = iter.next() {
-                    if i == idx {
-                        if let Some((next_i, _)) = iter.next() {
-                            state.cursor_position = next_i;
-                        } else {
-                            state.cursor_position = text.len();
-                        }
-                        break;
-                    }
-                }
-            } else if state.cursor_position < text.len() {
-                state.cursor_position += 1;
-            }
+                .map(|(i, _)| i)
+                .find(|i| *i > state.cursor_position)
+                .unwrap_or(text.len());
         }
     }
 
     pub fn move_cursor_home(&mut self) {
         if let Some(state) = &mut self.edit_state {
             if state.focused_field == EditField::Description {
+                state.snap_cursor_boundary();
                 let text = &state.description;
                 let last_newline = text[..state.cursor_position]
                     .rfind('\n')
@@ -831,6 +982,7 @@ impl App {
 
     pub fn move_cursor_end(&mut self) {
         if let Some(state) = &mut self.edit_state {
+            state.snap_cursor_boundary();
             let text = match state.focused_field {
                 EditField::Title => &state.title,
                 EditField::Category => &state.category,
@@ -953,8 +1105,19 @@ impl App {
                     if let Some(first) = selector.selected_items.first() {
                         edit_state.category = first.clone();
                     } else if !selector.search_query.is_empty() {
-                        // Allow creating new category on confirm if list is empty but query exists
-                        edit_state.category = selector.search_query.clone();
+                        // Allow creating new category on confirm if list is empty but query exists.
+                        // Register it so it gets a stable color and appears in
+                        // future selector lists.
+                        let name = selector.search_query.clone();
+                        if !self.data.known_categories.iter().any(|c| c.name == name) {
+                            let color =
+                                KanbanData::get_next_color(self.data.known_categories.len());
+                            self.data.known_categories.push(Tag {
+                                name: name.clone(),
+                                color: Some(color),
+                            });
+                        }
+                        edit_state.category = name;
                     }
                 }
             }
@@ -1073,9 +1236,17 @@ impl App {
                 if let Some(pos) = s.selected_items.iter().position(|n| n == &item.name) {
                     s.selected_items.remove(pos);
                 }
-                // Adjust cursor
-                if s.current_index > 0 && s.current_index >= s.available_items.len() {
-                    s.current_index = s.available_items.len().saturating_sub(1);
+                // Adjust cursor against the *filtered* list (it may be shorter
+                // than the full list while a search query is active), keeping
+                // the "+ Create" virtual entry reachable when a query is set.
+                let filtered_len = s.get_filtered_items().len();
+                let limit = if s.search_query.is_empty() {
+                    filtered_len.saturating_sub(1)
+                } else {
+                    filtered_len
+                };
+                if s.current_index > limit {
+                    s.current_index = limit;
                 }
             }
         }
@@ -1648,6 +1819,26 @@ mod tests {
         app.current_col_idx = 1;
         app.move_card_left(); // Should return early because no cards to move
         assert_eq!(app.data.projects[0].columns[0].cards.len(), 0); // Target unchanged
+    }
+
+    #[test]
+    fn test_editor_command_parsing() {
+        let path = std::path::Path::new("/tmp/f.md");
+
+        // Plain editor
+        let cmd = build_editor_command("vim", path).unwrap();
+        assert_eq!(cmd.get_program(), "vim");
+
+        // Editor with arguments (e.g. "code --wait")
+        let cmd = build_editor_command("code --wait", path).unwrap();
+        assert_eq!(cmd.get_program(), "code");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], std::ffi::OsStr::new("--wait"));
+        assert_eq!(args[1], path.as_os_str());
+
+        // Empty EDITOR must not panic
+        assert!(build_editor_command("   ", path).is_none());
     }
 
     #[test]

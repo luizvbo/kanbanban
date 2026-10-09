@@ -67,13 +67,30 @@ pub fn parse_markdown(content: &str) -> Text<'_> {
             // Normal Text
             Event::Text(t) => {
                 if in_code_block {
-                    // Render code block content
-                    current_line_spans.push(Span::styled(
-                        t.to_string(),
-                        Style::default().fg(Color::LightCyan),
-                    ));
+                    // Code block text arrives as a single event containing raw
+                    // newlines — split them into separate lines, otherwise the
+                    // whole block collapses onto one visual line.
+                    for (i, seg) in t.split('\n').enumerate() {
+                        if i > 0 {
+                            lines.push(Line::from(std::mem::take(&mut current_line_spans)));
+                        }
+                        if !seg.is_empty() {
+                            current_line_spans.push(Span::styled(
+                                seg.to_string(),
+                                Style::default().fg(Color::LightCyan),
+                            ));
+                        }
+                    }
                 } else {
-                    current_line_spans.push(Span::styled(t.to_string(), style));
+                    // Same newline handling for defensive robustness.
+                    for (i, seg) in t.split('\n').enumerate() {
+                        if i > 0 {
+                            lines.push(Line::from(std::mem::take(&mut current_line_spans)));
+                        }
+                        if !seg.is_empty() {
+                            current_line_spans.push(Span::styled(seg.to_string(), style));
+                        }
+                    }
                 }
             }
 
