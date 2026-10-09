@@ -25,8 +25,13 @@ pub fn soft_wrap(text: &str, max_width: usize) -> Vec<String> {
             continue;
         }
 
-        // Calculate char width (Tabs = 4, others = 1)
-        let w = if c == '\t' { 4 } else { 1 };
+        // Terminal display width (tabs = 4, wide chars = 2, control = 0)
+        // so wrapping matches what the terminal actually renders.
+        let w = if c == '\t' {
+            4
+        } else {
+            unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+        };
 
         // Check if adding this character exceeds the width
         if current_width + w > max_width {
@@ -64,8 +69,9 @@ pub fn draw_input_modal(f: &mut Frame, title: &str, input: &str) {
 
     f.render_widget(input_widget, area);
 
-    // Position cursor: Area X + Border(1) + "> "(2) + Input Len
-    f.set_cursor_position((area.x + 3 + input.len() as u16, area.y + 1));
+    // Position cursor: Area X + Border(1) + "> "(2) + display width of input
+    let input_width = unicode_width::UnicodeWidthStr::width(input) as u16;
+    f.set_cursor_position((area.x + 3 + input_width, area.y + 1));
 }
 
 pub fn draw_column_delete_modal(f: &mut Frame, app: &App) {
@@ -191,11 +197,12 @@ pub fn draw_detail_view(f: &mut Frame, app: &App) {
     let area = centered_rect(80, 80, f.area());
     f.render_widget(Clear, area);
 
-    let col = &app.current_project().columns[app.current_col_idx];
-    if col.cards.is_empty() {
+    let Some(col) = app.current_project().columns.get(app.current_col_idx) else {
         return;
-    }
-    let card = &col.cards[app.current_card_idx];
+    };
+    let Some(card) = col.cards.get(app.current_card_idx) else {
+        return;
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -267,11 +274,15 @@ pub fn draw_detail_view(f: &mut Frame, app: &App) {
     f.render_widget(Block::default().borders(Borders::BOTTOM), chunks[3]);
 
     // 5. Description
+    // Clamp the scroll offset to the content: scrolling past the last line
+    // (e.g. after 'G' sets u16::MAX) would render a blank viewport.
     let markdown = parse_markdown(&card.description);
+    let max_scroll = (markdown.lines.len() as u16).saturating_sub(chunks[4].height);
+    let scroll_y = app.view_scroll_y.min(max_scroll);
     f.render_widget(
         Paragraph::new(markdown)
             .wrap(Wrap { trim: false })
-            .scroll((app.view_scroll_y, 0)),
+            .scroll((scroll_y, 0)),
         chunks[4],
     );
 
@@ -544,15 +555,17 @@ pub fn draw_edit_popup(f: &mut Frame, app: &mut App) {
             let show_cursor = state.focused_field != EditField::Tags
                 && state.focused_field != EditField::Category;
             if show_cursor {
+                // For single-line fields, get_cursor_position_2d returns the
+                // display column (handles multi-byte/wide chars correctly).
                 let (x, y) = match state.focused_field {
                     EditField::Title => (
-                        chunks[0].x + 1 + state.cursor_position as u16,
+                        chunks[0].x + 1 + state.get_cursor_position_2d(0).0,
                         chunks[0].y + 1,
                     ),
                     EditField::Category => (0, 0), // Handled by modal
                     EditField::Tags => (0, 0),     // Handled by modal
                     EditField::DueDate => (
-                        chunks[3].x + 1 + state.cursor_position as u16,
+                        chunks[3].x + 1 + state.get_cursor_position_2d(0).0,
                         chunks[3].y + 1,
                     ),
                     EditField::Description => {
@@ -632,9 +645,9 @@ pub fn draw_help_popup(f: &mut Frame, app: &App) {
         "Card Actions",
         vec![
             ("a / n", "Add New Card"),
-            ("Enter", "Edit Card"),
+            ("Enter / e / i", "Edit Card"),
             ("d", "Delete Card"),
-            ("o", "External Editor (Vim/Nano)"),
+            ("o", "External Editor (in View/Edit)"),
         ],
     );
 
@@ -662,7 +675,7 @@ pub fn draw_help_popup(f: &mut Frame, app: &App) {
     // --- Footer / Path ---
     // Added a simple separator line
     help_text.push(Line::from(Span::styled(
-        "─".repeat(area.width as usize - 4),
+        "─".repeat((area.width as usize).saturating_sub(4)),
         Style::default().fg(Color::DarkGray),
     )));
 

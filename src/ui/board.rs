@@ -35,7 +35,9 @@ fn safe_truncate(s: &str, max_width: usize) -> (String, String) {
 /// It splits the available area into equal chunks based on column count.
 pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
     let project_idx = app.current_project_idx;
-    let n_columns = app.data.projects[project_idx].columns.len();
+    let Some(n_columns) = app.data.projects.get(project_idx).map(|p| p.columns.len()) else {
+        return;
+    };
 
     if n_columns == 0 {
         return;
@@ -61,24 +63,11 @@ pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
         {
             let col = &mut app.data.projects[project_idx].columns[i];
 
-            // FIX 2: Inline the filter logic using the local `filter_query` string
-            // This avoids the "second borrow of app" error.
             let visible_indices: Vec<usize> = col
                 .cards
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| {
-                    if !has_filter {
-                        return true;
-                    }
-                    c.title.to_lowercase().contains(&filter_query)
-                        || c.category
-                            .as_ref()
-                            .is_some_and(|cat| cat.to_lowercase().contains(&filter_query))
-                        || c.tags
-                            .iter()
-                            .any(|t| t.name.to_lowercase().contains(&filter_query))
-                })
+                .filter(|(_, c)| !has_filter || c.matches_query(&filter_query))
                 .map(|(idx, _)| idx)
                 .collect();
 
@@ -88,7 +77,9 @@ pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
                     col.scroll_offset = selected_card_idx;
                 }
 
-                // Calculate heights to check if selected card is out of view
+                // Calculate heights to check if selected card is out of view.
+                // Only *visible* (matching) cards consume height — hidden cards
+                // are not drawn, so counting them corrupts the scroll math.
                 let block = Block::default().borders(Borders::ALL);
                 let inner_area = block.inner(col_chunks[i]);
                 let available_height = inner_area.height;
@@ -99,8 +90,8 @@ pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
                     let mut current_height = 0;
                     let mut selected_in_view = false;
 
-                    for (j, card) in col.cards.iter().enumerate().skip(start_draw_idx) {
-                        let card_h = get_card_height(card);
+                    for &j in visible_indices.iter().filter(|&&j| j >= start_draw_idx) {
+                        let card_h = get_card_height(&col.cards[j]);
                         if current_height + card_h > available_height {
                             break;
                         }
@@ -154,21 +145,8 @@ pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
         let mut y_offset = inner_area.y;
 
         for (j, card) in col.cards.iter().enumerate().skip(col.scroll_offset) {
-            // FIX 3: Use the same local filter logic here
-            if has_filter {
-                let matches = card.title.to_lowercase().contains(&filter_query)
-                    || card
-                        .category
-                        .as_ref()
-                        .is_some_and(|cat| cat.to_lowercase().contains(&filter_query))
-                    || card
-                        .tags
-                        .iter()
-                        .any(|t| t.name.to_lowercase().contains(&filter_query));
-
-                if !matches {
-                    continue;
-                }
+            if has_filter && !card.matches_query(&filter_query) {
+                continue;
             }
 
             let card_height = get_card_height(card);
@@ -196,31 +174,19 @@ pub fn draw_board(f: &mut Frame, app: &mut App, area: Rect) {
 /// This must return a consistent value to ensure the board's vertical
 /// scrolling doesn't jitter.
 pub fn get_card_height(card: &Card) -> u16 {
-    // Current design uses a fixed 2-line max for descriptions
-    // to keep the board compact.
+    // Must stay in sync with the layout constraints in `draw_card`:
+    // the meta row exists when a category OR tags are present, and the
+    // description preview always reserves exactly 2 rows.
     let mut h = 2; // Top and Bottom Borders
+    h += 1; // Title row
 
-    // 1. Title row (always 1)
-    h += 1;
-
-    // 2. Tags row
-    if !card.tags.is_empty() {
-        h += 1;
+    if card.category.is_some() || !card.tags.is_empty() {
+        h += 1; // Category + Tags row
     }
-
-    // 3. Due Date row
     if card.due_date.is_some() {
-        h += 1;
+        h += 1; // Due Date row
     }
-
-    // 4. Description Preview
-    // We now fix this to a maximum of 2 lines for the board view.
-    // If empty, we still give it 1 line for "No description" or empty space.
-    if card.description.trim().is_empty() {
-        h += 1;
-    } else {
-        h += 2;
-    }
+    h += 2; // Description preview (always 2 rows)
 
     h
 }

@@ -56,18 +56,28 @@ kbb my_work_board.yaml  # Loads specific file
 | **Normal**  | `h` / `l`           | Switch Columns                              |
 |             | `j` / `k`           | Select Card                                 |
 |             | `a` / `n`           | **A**dd **N**ew Card                        |
-|             | `Enter` / `e`       | **E**dit Card                               |
+|             | `Enter` / `e` / `i` | **E**dit Card                               |
 |             | `v`                 | **V**iew Details (Full Markdown)            |
 |             | `d`                 | **D**elete Card                             |
+|             | `c`                 | **C**reate New Column                       |
+|             | `D`                 | **D**elete Current Column                   |
 |             | `H` / `L`           | Move Card to Left / Right Column            |
 |             | `J` / `K`           | Move Card Up / Down inside Column           |
+|             | `<` / `>`           | Move Column Left / Right                    |
 |             | `r` / `R`           | **R**ename Column / **R**ename Board        |
 |             | `/`                 | **Filter** cards by title, tag, or category |
 |             | `?`                 | Toggle Help Menu                            |
+| **View**    | `j` / `k`           | Scroll Description                          |
+|             | `g` / `G`           | Jump to Top / Bottom                        |
+|             | `Ctrl+u` / `Ctrl+d` | Page Up / Down                              |
+|             | `o`                 | Edit in **External Editor**                 |
 | **Editing** | `Tab` / `Shift+Tab` | Cycle through Title, Category, Tags, etc.   |
-|             | `Enter`             | Edit selected field / Cycle to next         |
+|             | `Enter`             | Edit selected field / Open selector         |
 |             | `o`                 | Open Description in **External Editor**     |
 |             | `Esc`               | Stop editing field / Exit Modal             |
+| **Selector**| `Enter`             | Toggle item / Create new                    |
+|             | `Del`               | Delete item from registry                   |
+|             | `Esc`               | Apply selection & Close                     |
 
 ## Data Storage
 
