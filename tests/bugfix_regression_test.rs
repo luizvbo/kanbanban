@@ -397,3 +397,99 @@ fn test_new_card_without_columns_shows_status() {
     assert_eq!(app.mode, InputMode::Normal, "must not open dead-end modal");
     assert!(app.status_message.is_some());
 }
+
+// ---------- GAP: filtered-out cards must not be rendered ----------
+#[test]
+fn test_filtered_board_hides_nonmatching_cards() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let (mut app, _dir) = create_app();
+    let col = &mut app.data.projects[0].columns[0];
+    col.cards.push(card("AlphaTask"));
+    col.cards.push(card("BetaTask"));
+
+    app.filter_query = "beta".into();
+    app.stop_filter();
+
+    let backend = TestBackend::new(80, 20);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| kanbanban::ui::draw(f, &mut app)).unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let mut content = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            content.push(buffer[(x, y)].symbol().chars().next().unwrap_or(' '));
+        }
+        content.push('\n');
+    }
+    assert!(content.contains("BetaTask"), "matching card must render");
+    assert!(
+        !content.contains("AlphaTask"),
+        "filtered-out card must not render"
+    );
+}
+
+// ---------- GAP: selector delete must clamp the cursor onto the filtered list ----------
+#[test]
+fn test_selector_delete_clamps_cursor() {
+    let (mut app, _dir) = create_app();
+    app.data.known_tags = ["a", "b", "c"]
+        .iter()
+        .map(|n| Tag {
+            name: (*n).into(),
+            color: None,
+        })
+        .collect();
+    app.start_new_card();
+    app.open_selector(SelectorType::Tag);
+
+    // Delete the last item while the cursor sits on it: the cursor must
+    // move back onto a real item rather than pointing past the end, where
+    // a following Delete would silently no-op.
+    app.selector_state.as_mut().unwrap().current_index = 2;
+    app.selector_delete_item();
+    {
+        let s = app.selector_state.as_ref().unwrap();
+        assert_eq!(s.get_filtered_items().len(), 2);
+        assert!(
+            s.current_index < s.get_filtered_items().len(),
+            "cursor {} must stay on a real item after deletion",
+            s.current_index
+        );
+    }
+    app.selector_delete_item(); // must delete the clamped item, not no-op
+    assert_eq!(
+        app.selector_state
+            .as_ref()
+            .unwrap()
+            .get_filtered_items()
+            .len(),
+        1
+    );
+
+    // With an active search, deleting the last matching item may leave the
+    // cursor on the virtual "+ Create" slot (index == filtered_len) — but
+    // never past it.
+    {
+        let s = app.selector_state.as_mut().unwrap();
+        s.search_query = "a".into(); // only "a" remains and matches
+        s.current_index = 0;
+    }
+    app.selector_delete_item(); // deletes "a"
+    let s = app.selector_state.as_ref().unwrap();
+    assert_eq!(s.get_filtered_items().len(), 0);
+    assert_eq!(
+        s.current_index, 0,
+        "cursor must land on the virtual '+ Create' slot, never past it"
+    );
+}
+
+// ---------- GAP: soft_wrap must count terminal display width ----------
+#[test]
+fn test_soft_wrap_counts_display_width() {
+    use kanbanban::ui::modals::soft_wrap;
+    // Each full-width char occupies 2 columns: 4 chars fit width 4 as two lines.
+    assert_eq!(soft_wrap("ＡＢＣＤ", 4), vec!["ＡＢ", "ＣＤ"]);
+    // A tab counts as 4 columns, forcing subsequent chars onto the next line.
+    assert_eq!(soft_wrap("a\tb", 4), vec!["a", "\t", "b"]);
+}

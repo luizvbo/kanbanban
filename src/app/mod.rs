@@ -20,6 +20,46 @@ fn build_editor_command(editor: &str, file: &std::path::Path) -> Option<std::pro
     Some(cmd)
 }
 
+/// Creates the temporary markdown file handed to the external editor.
+///
+/// The file is created with `O_EXCL` semantics and retried under a fresh
+/// name on collision: a predictable name inside the world-writable temp
+/// dir must never follow a pre-existing symlink. On Unix it is then
+/// restricted to owner-only (`0600`) since card contents may be sensitive.
+///
+/// Returns the path and the open handle (still at offset 0).
+fn create_secure_temp_file(initial_content: &str) -> Option<(PathBuf, std::fs::File)> {
+    use std::io::Write;
+    let mut temp_file = std::env::temp_dir();
+    for _ in 0..16 {
+        let unique = EDITOR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        temp_file.push(format!(
+            "kanbanban_edit_{}_{}.md",
+            std::process::id(),
+            unique
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_file)
+        {
+            Ok(mut file) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+                }
+                let _ = file.write_all(initial_content.as_bytes());
+                return Some((temp_file, file));
+            }
+            Err(_) => {
+                temp_file.pop();
+            }
+        }
+    }
+    None
+}
+
 /// Defines the possible interaction states of the application.
 /// Used by the event handler to determine how to interpret key presses
 /// and by the UI to determine which modals to render.
@@ -359,48 +399,11 @@ impl App {
             card.description.clone()
         };
 
-        use std::io::Write;
-        // Create the temp file with O_EXCL semantics: a predictable name in the
-        // world-writable temp dir must never follow a pre-existing symlink, and
-        // on Unix the file must be readable only by the owner (card contents
-        // may be sensitive).
-        let mut temp_file = std::env::temp_dir();
-        let mut file = None;
-        for _ in 0..16 {
-            let unique = EDITOR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-            temp_file.push(format!(
-                "kanbanban_edit_{}_{}.md",
-                std::process::id(),
-                unique
-            ));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp_file)
-            {
-                Ok(f) => {
-                    file = Some(f);
-                    break;
-                }
-                Err(_) => {
-                    temp_file.pop();
-                    continue;
-                }
-            }
-        }
-
-        let Some(mut file) = file else {
+        let Some((temp_file, file)) = create_secure_temp_file(&initial_content) else {
             self.status_message = Some("Failed to create temp file".into());
             self.status_time = Some(Instant::now());
             return;
         };
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-        }
-        let _ = file.write_all(initial_content.as_bytes());
         drop(file);
 
         // TUI Suspension block (not compiled during unit tests)
@@ -433,6 +436,7 @@ impl App {
         #[cfg(test)]
         {
             use std::fs::OpenOptions;
+            use std::io::Write;
             if let Ok(mut file) = OpenOptions::new().append(true).open(&temp_file) {
                 let _ = writeln!(file, "\n[Edited Externally]");
                 let _ = file.sync_all();
@@ -1839,6 +1843,41 @@ mod tests {
 
         // Empty EDITOR must not panic
         assert!(build_editor_command("   ", path).is_none());
+    }
+
+    #[test]
+    fn test_secure_temp_file_is_owner_only_and_never_clobbers() {
+        // Plant a collision at the next generated name: the temp file must
+        // be created under a *different* name, and the existing file (which
+        // an attacker could pre-create as a symlink bait) must be untouched.
+        let next = EDITOR_TEMP_COUNTER.load(Ordering::Relaxed);
+        let collision =
+            std::env::temp_dir().join(format!("kanbanban_edit_{}_{}.md", std::process::id(), next));
+        std::fs::write(&collision, "do not touch").unwrap();
+
+        let (path, file) = create_secure_temp_file("card body").expect("temp file must be created");
+        drop(file);
+
+        assert_ne!(
+            path, collision,
+            "must retry under a different name on collision"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&collision).unwrap(),
+            "do not touch",
+            "existing file must never be overwritten"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "card body");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "temp file must be owner-only, got {mode:o}");
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&collision);
     }
 
     #[test]
